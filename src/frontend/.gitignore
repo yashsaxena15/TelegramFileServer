@@ -1,0 +1,42 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Tauri
+src-tauri/target
+src-tauri/**/*.so
+src-tauri/**/*.json
+src-tauri/**/*.dll
+src-tauri/**/*.dylib
+src-tauri/**/*.pdb
+src-tauri/**/*.dSYM
+src-tauri/**/*.app
+src-tauri/**/*.exe
+src-tauri/**/*.deb
+src-tauri/**/*.rpm
+src-tauri/**/*.AppImage
+src-tauri/**/*.msi
+src-tauri/**/*.appx
+src-tauri/Cargo.lock
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+

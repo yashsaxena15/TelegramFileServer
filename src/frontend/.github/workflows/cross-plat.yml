@@ -1,0 +1,126 @@
+name: Build & Release Tauri App
+
+on:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    if: contains(github.event.head_commit.message, 'new release')
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install system dependencies for Linux
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        shell: bash
+
+      - name: Read version from VERSION file
+        id: get_version
+        run: |
+          version=$(cat "${{ github.workspace }}/VERSION" | tr -d ' \t\n\r')
+          echo "version=$version" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Extract release notes from commit message
+        id: get_release_notes
+        run: |
+          python - <<'PY'
+          import json, os
+
+          ev_path = os.environ.get('GITHUB_EVENT_PATH')
+          if not ev_path:
+              raise SystemExit('GITHUB_EVENT_PATH not set')
+
+          with open(ev_path, 'r', encoding='utf-8') as f:
+              ev = json.load(f)
+
+          msg = ev.get('head_commit', {}).get('message') or ''
+          # everything after the first line:
+          lines = msg.splitlines()
+          release = '\n'.join(lines[1:]).strip()
+
+          out_path = os.environ.get('GITHUB_OUTPUT')
+          if not out_path:
+              raise SystemExit('GITHUB_OUTPUT not set')
+
+          with open(out_path, 'a', encoding='utf-8') as out:
+              out.write('release_notes<<EOF\n')
+              out.write(release + '\n')
+              out.write('EOF\n')
+          PY
+        shell: bash
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm install
+        shell: bash
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+        shell: bash
+
+      # macOS needs extra setup for signing disabled
+      - name: Disable macOS signing
+        if: matrix.os == 'macos-latest'
+        run: |
+          echo "TAURI_SIGNING_PRIVATE_KEY=" >> $GITHUB_ENV
+          echo "TAURI_SIGNING_PASSWORD=" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build Tauri app
+        run: npm run tauri build
+        shell: bash
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          body: ${{ steps.get_release_notes.outputs.release_notes }}
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/release/telegram-file-server.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
