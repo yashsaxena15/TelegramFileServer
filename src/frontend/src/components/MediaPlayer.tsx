@@ -53,7 +53,7 @@ export const MediaPlayer = ({ mediaUrl, fileName, fileType, startPosition, onClo
         // Create media element with attributes that prevent default player
         const mediaElement = document.createElement(fileType === 'video' ? 'video' : 'audio');
         mediaElement.controls = false; // Disable default controls
-        mediaElement.preload = "none"; // Prevent automatic loading
+        mediaElement.preload = "metadata"; // Load metadata immediately for progressive streaming
         mediaElement.style.width = '100%';
         mediaElement.style.height = '100%';
         mediaElement.style.maxHeight = '100%';

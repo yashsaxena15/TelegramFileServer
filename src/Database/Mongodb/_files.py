@@ -25,6 +25,10 @@ class FileData:
     file_path: str = "/"  # Path where file is located, default is root
     owner_id: str = None  # Owner user ID for multi-user support
     modified_date: str = None  # ISO format date string for when file was last modified
+    is_split: bool = False
+    total_parts: int = 1
+    part_size: int = None
+    parts: list = None
     
 class Files(Collection):
     def __init__(self,collection: Collection) -> None:
@@ -65,6 +69,46 @@ class Files(Collection):
             self.insert_one(file_doc)
             return True
         return None
+
+    def add_multipart_file(
+        self,
+        chat_id: int,
+        thumbnail: str,
+        file_type: str,
+        file_unique_id: str,
+        file_size: int,
+        file_name: str,
+        file_caption: str,
+        parts: list,
+        file_path: str = "/Home",
+        owner_id: str = None,
+        modified_date: str = None,
+        part_size: int = None
+    ):
+        """Add a multi-part file entry to the database for files > 2GB"""
+        if not file_path or file_path in ["/", "Home", "/Home"]:
+            file_path = "/Home"
+            
+        file_doc = {
+            "chat_id": chat_id,
+            "message_id": parts[0]["message_id"] if parts else 0,
+            "thumbnail": thumbnail,
+            "file_type": file_type,
+            "file_unique_id": file_unique_id,
+            "file_size": file_size,
+            "file_name": file_name,
+            "file_caption": file_caption,
+            "file_path": file_path,
+            "owner_id": owner_id,
+            "modified_date": modified_date or datetime.utcnow().isoformat(),
+            "is_split": True,
+            "total_parts": len(parts),
+            "part_size": part_size or (parts[0]["part_size"] if parts else 0),
+            "parts": parts
+        }
+        logger.info(f"Adding multi-part file '{file_name}' ({file_size} bytes, {len(parts)} parts) at path '{file_path}'")
+        self.insert_one(file_doc)
+        return True
 
     def add_folder(self, folder_name: str, folder_path: str = "/", owner_id: str = None):
         """Add a folder entry to the database"""
@@ -193,7 +237,11 @@ class Files(Collection):
             file_caption=file.get("file_caption"),
             file_path=file.get("file_path", "/"),  # Default to root if not set
             owner_id=file.get("owner_id"),
-            modified_date=file.get("modified_date")
+            modified_date=file.get("modified_date"),
+            is_split=file.get("is_split", False),
+            total_parts=file.get("total_parts", 1),
+            part_size=file.get("part_size"),
+            parts=file.get("parts")
             ) for file in files]
     
     def get_files_by_path(self, path: str = "/", owner_id: str = None):
@@ -234,7 +282,11 @@ class Files(Collection):
             file_caption=file.get("file_caption"),
             file_path=file.get("file_path", "/"),
             owner_id=file.get("owner_id"),
-            modified_date=file.get("modified_date")
+            modified_date=file.get("modified_date"),
+            is_split=file.get("is_split", False),
+            total_parts=file.get("total_parts", 1),
+            part_size=file.get("part_size"),
+            parts=file.get("parts")
         ) for file in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):
@@ -269,7 +321,11 @@ class Files(Collection):
             file_caption=file_data.get("file_caption"),
             file_path=file_data.get("file_path", "/"),
             owner_id=file_data.get("owner_id"),
-            modified_date=file_data.get("modified_date")
+            modified_date=file_data.get("modified_date"),
+            is_split=file_data.get("is_split", False),
+            total_parts=file_data.get("total_parts", 1),
+            part_size=file_data.get("part_size"),
+            parts=file_data.get("parts")
         )
 
     def check_file_owner(self, file_id: str, owner_id: str) -> bool:

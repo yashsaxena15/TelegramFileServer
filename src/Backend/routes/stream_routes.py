@@ -134,13 +134,22 @@ async def stream_handler(request: Request, file_name: str):
         print(f"Exception getting file from Telegram: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
 
+    is_split = file_data.get("is_split", False)
+    parts = file_data.get("parts", [])
+    total_file_size = file_data.get("file_size")
+    file_name_db = file_data.get("file_name")
+
     return await media_streamer(
         request,
         client=client,
         chat_id=chat_id,
         id=message_id,
         file=file,
-        secure_hash=file_hash
+        secure_hash=file_hash,
+        is_split=is_split,
+        file_size=total_file_size,
+        file_name=file_name_db,
+        parts=parts
     )
 
 # parse_range_header function has been moved to streaming_utils module
@@ -398,7 +407,106 @@ async def media_streamer(
     id: int,
     file: raw.types.MessageMediaDocument,
     secure_hash: str,
+    is_split: bool = False,
+    file_size: int = None,
+    file_name: str = None,
+    parts: list = None
 ) -> StreamingResponse:
+    if is_split and parts:
+        range_header = request.headers.get("Range", "")
+        if hasattr(client, 'add_workload'):
+            client.add_workload(1)
+
+        tg_connect = class_cache.get(client)
+        if not tg_connect:
+            tg_connect = ByteStreamer(client)
+            class_cache[client] = tg_connect
+
+        total_size = file_size or sum(p.get("part_size", 0) for p in parts)
+        from_bytes, until_bytes = parse_range_header(range_header, total_size)
+        req_length = until_bytes - from_bytes + 1
+        chunk_size = 1024 * 1024
+
+        bot_manager = getattr(request.app.state, 'bot_manager', None)
+        active_clients = []
+        if bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+            active_clients = [c for c in bot_manager.client_list if getattr(c, 'is_connected', False)]
+        if not active_clients:
+            active_clients = [client]
+
+        overlapping_parts = []
+        for p in parts:
+            p_start = p["start_byte"]
+            p_end = p["end_byte"]
+            if p_end < from_bytes or p_start > until_bytes:
+                continue
+
+            p_msg_id = p["message_id"]
+            p_chat_id = p.get("chat_id", chat_id)
+            p_workers = []
+            p_file_id = None
+
+            for c in active_clients:
+                try:
+                    c_fid = await tg_connect.get_file_properties(chat_id=p_chat_id, message_id=p_msg_id, client=c)
+                    if c_fid:
+                        p_workers.append((c, c_fid))
+                        if not p_file_id:
+                            p_file_id = c_fid
+                except Exception as ex:
+                    LOGGER.warning(f"Error getting file property for part msg {p_msg_id} on {getattr(c, 'name', c)}: {ex}")
+
+            if not p_workers and p_file_id:
+                p_workers = [(client, p_file_id)]
+
+            if p_file_id:
+                overlapping_parts.append({
+                    "part": p,
+                    "file_id": p_file_id,
+                    "workers": p_workers
+                })
+
+        body = tg_connect.yield_multipart_file(
+            overlapping_parts=overlapping_parts,
+            from_bytes=from_bytes,
+            until_bytes=until_bytes,
+            chunk_size=chunk_size
+        )
+
+        final_file_name = file_name or getattr(file, 'file_name', f"File_{id}")
+        mime_type = resolve_mime_type(final_file_name) if final_file_name else "application/octet-stream"
+        is_watch = hasattr(request.state, 'is_watch') and request.state.is_watch
+        content_disposition = f'inline; filename="{final_file_name}"' if is_watch else f'attachment; filename="{final_file_name}"'
+
+        headers = {
+            "Content-Type": mime_type,
+            "Content-Length": str(req_length),
+            "Content-Disposition": content_disposition,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=3600, immutable",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+        }
+        if is_watch and (mime_type.startswith('video/') or mime_type.startswith('audio/')):
+            headers["X-Content-Type-Options"] = "nosniff"
+            headers["X-Frame-Options"] = "SAMEORIGIN"
+
+        if range_header:
+            headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{total_size}"
+            status_code = 206
+        else:
+            status_code = 200
+
+        if hasattr(client, 'add_workload'):
+            client.add_workload(-1)
+
+        return StreamingResponse(
+            status_code=status_code,
+            content=body,
+            headers=headers,
+            media_type=mime_type,
+        )
+
     range_header = request.headers.get("Range", "")
     
     # Add workload to the client
