@@ -483,12 +483,8 @@ export const FileExplorer = () => {
 
   const handleNewFolder = async (folderName: string) => {
     try {
-      // Construct the correct path for the backend
-      let backendPath = "/";
-      if (currentPath.length > 1) {
-        // For all folder types, we construct the path consistently
-        backendPath = `/${currentPath.join('/')}`;
-      }
+      // Use currentApiPath which correctly handles /Home and subfolders
+      const backendPath = currentApiPath;
       
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
@@ -616,13 +612,7 @@ export const FileExplorer = () => {
 
     try {
       const item = renamingItem.item;
-      
-      // Construct the correct path for the backend
-      let backendPath = "/";
-      if (currentPath.length > 1) {
-        // For all folder types, we construct the path consistently
-        backendPath = `/${currentPath.join('/')}`;
-      }
+      const backendPath = currentApiPath;
       
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
@@ -659,13 +649,7 @@ export const FileExplorer = () => {
 
     try {
       const item = deleteDialog.item;
-      
-      // Construct the correct path for the backend
-      let backendPath = "/";
-      if (currentPath.length > 1) {
-        // For all folder types, we construct the path consistently
-        backendPath = `/${currentPath.join('/')}`;
-      }
+      const backendPath = currentApiPath;
       
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL

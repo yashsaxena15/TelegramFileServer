@@ -68,15 +68,18 @@ class Files(Collection):
 
     def add_folder(self, folder_name: str, folder_path: str = "/", owner_id: str = None):
         """Add a folder entry to the database"""
+        # Normalize folder_path: root is "/Home"
+        if not folder_path or folder_path in ["/", "Home", "/Home"]:
+            folder_path = "/Home"
+            path_query = {"$in": ["/Home", "/"]}
+        else:
+            path_query = folder_path
+
         # Log the parameters for debugging
         logger.info(f"add_folder called with folder_name='{folder_name}', folder_path='{folder_path}', owner_id='{owner_id}'")
-        
-        # Ensure folder_path is not empty
-        if not folder_path:
-            folder_path = "/"
             
         # Check if folder already exists
-        query = {"file_name": folder_name, "file_path": folder_path, "file_type": "folder"}
+        query = {"file_name": folder_name, "file_path": path_query, "file_type": "folder"}
         # Include owner_id in query if provided
         if owner_id:
             query["owner_id"] = owner_id
@@ -208,8 +211,8 @@ class Files(Collection):
             all_items = list(self.find(files_query))
         # For root path, get files with path="/" and folders with path="/"
         elif path == "/" or path == "Home" or path == "/Home":
-            # Get root-level files and folders
-            files_query = build_query({"file_path": "/Home"})
+            # Get root-level files and folders (support both /Home and /)
+            files_query = build_query({"file_path": {"$in": ["/Home", "/"]}})
             all_items = list(self.find(files_query))
         else:
             # Get files and folders in the specified folder
@@ -236,10 +239,10 @@ class Files(Collection):
     
     def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):
         """Create a folder entry in the database"""
-        # The folder's path is where it's located, which is the current_path
-        # e.g., if we're in "/" and create "TestFolder", the folder's path is "/"
-        # if we're in "/TestFolder" and create "SubFolder", the folder's path is "/TestFolder"
-        folder_path = current_path
+        if not current_path or current_path in ["/", "Home", "/Home"]:
+            folder_path = "/Home"
+        else:
+            folder_path = current_path
         
         return self.add_folder(folder_name, folder_path, owner_id)
 

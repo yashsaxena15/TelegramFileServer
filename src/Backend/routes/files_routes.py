@@ -158,21 +158,22 @@ async def delete_file_route(request: DeleteFileRequest, user: User = Depends(req
             folder_path = file_data.get("file_path", "/")
             folder_name = file_data.get("file_name", "")
             
-            # Construct the full folder path
-            if folder_path == "/":
-                full_folder_path = f"/{folder_name}"
+            # Construct the full folder paths (handle both /Home and /)
+            paths_to_delete = []
+            if folder_path in ["/", "/Home", "Home"]:
+                paths_to_delete.extend([f"/Home/{folder_name}", f"/{folder_name}"])
             else:
-                full_folder_path = f"{folder_path}/{folder_name}"
+                paths_to_delete.append(f"{folder_path}/{folder_name}")
             
-            # Delete all files in the folder (owned by the user)
-            database.Files.delete_many({"file_path": full_folder_path, "owner_id": user_id})
-            
-            # Also delete any subfolders and files inside this folder
-            # Delete items that are inside this folder (path starts with full_folder_path + "/")
-            database.Files.delete_many({
-                "file_path": {"$regex": f"^{re.escape(full_folder_path)}/"},
-                "owner_id": user_id
-            })
+            for f_path in paths_to_delete:
+                # Delete all files in the folder (owned by the user)
+                database.Files.delete_many({"file_path": f_path, "owner_id": user_id})
+                
+                # Also delete any subfolders and files inside this folder
+                database.Files.delete_many({
+                    "file_path": {"$regex": f"^{re.escape(f_path)}/"},
+                    "owner_id": user_id
+                })
         
         # Delete the file/folder itself
         result = database.Files.delete_one({"_id": ObjectId(request.file_id), "owner_id": user_id})
