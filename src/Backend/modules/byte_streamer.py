@@ -144,6 +144,61 @@ class ByteStreamer:
                 if hasattr(w_c, 'add_workload'):
                     w_c.add_workload(-1)
 
+    async def yield_multipart_file(
+        self,
+        overlapping_parts: list,
+        from_bytes: int,
+        until_bytes: int,
+        chunk_size: int = 1024 * 1024,
+    ):
+        """
+        Stream a virtual multi-part file across multiple Telegram messages seamlessly.
+        Each item in overlapping_parts:
+        {
+            "part": part_dict,
+            "file_id": FileId,
+            "workers": [(client, fid), ...]
+        }
+        """
+        LOGGER.info(f"yield_multipart_file: range {from_bytes}-{until_bytes} across {len(overlapping_parts)} overlapping part(s)")
+        for item in overlapping_parts:
+            part = item["part"]
+            p_start = part["start_byte"]
+            p_end = part["end_byte"]
+            if p_end < from_bytes or p_start > until_bytes:
+                continue
+
+            # Calculate byte range relative to this part
+            p_from = max(from_bytes, p_start) - p_start
+            p_until = min(until_bytes, p_end) - p_start
+
+            p_offset = p_from - (p_from % chunk_size)
+            p_first_part_cut = p_from - p_offset
+            p_last_part_cut = (p_until % chunk_size) + 1
+            p_part_count = math.ceil((p_until + 1) / chunk_size) - math.floor(p_offset / chunk_size)
+
+            workers = item.get("workers") or []
+            primary_client = workers[0][0] if workers else self.client
+            file_id = item["file_id"]
+
+            LOGGER.info(
+                f"Streaming multi-part slice: Part {part.get('part_index', '?')}, "
+                f"local range {p_from}-{p_until}, offset {p_offset}, "
+                f"parts={p_part_count}, workers={len(workers)}"
+            )
+
+            async for chunk in self.yield_file(
+                file_id=file_id,
+                client=primary_client,
+                offset=p_offset,
+                first_part_cut=p_first_part_cut,
+                last_part_cut=p_last_part_cut,
+                part_count=p_part_count,
+                chunk_size=chunk_size,
+                workers=workers
+            ):
+                yield chunk
+
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
         media_session = client.media_sessions.get(file_id.dc_id, None)
         if media_session is None:

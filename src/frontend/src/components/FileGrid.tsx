@@ -247,58 +247,30 @@ export const FileGrid = ({
     if (item.type === "folder") {
       onNavigate(item.name);
     } else if (item.fileType === "photo" && item.file_unique_id) {
-      // Open image in viewer with file name instead of unique ID
+      // Open image in viewer immediately with authenticated streaming URL
       const baseUrl = getApiBaseUrl();
+      const token = localStorage.getItem('auth_token');
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
       const imageUrl = baseUrl 
-        ? `${baseUrl}/dl/${encodeURIComponent(item.name)}` 
-        : `/dl/${encodeURIComponent(item.name)}`;
+        ? `${baseUrl}/dl/${encodeURIComponent(item.name)}${tokenParam}` 
+        : `/dl/${encodeURIComponent(item.name)}${tokenParam}`;
       
-      // Pre-fetch the image using our authenticated API client and create an object URL
-      try {
-        const { fetchWithTimeout } = await import('@/lib/api');
-        const response = await fetchWithTimeout(imageUrl, { method: 'GET' }, 10000);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.statusText}`);
-        }
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        setImageViewer({ url: objectUrl, fileName: item.name });
-      } catch (error) {
-        console.error('Failed to load image:', error);
-        // Fallback to direct URL (may still fail with 401)
-        setImageViewer({ url: imageUrl, fileName: item.name });
-      }
+      setImageViewer({ url: imageUrl, fileName: item.name });
     } else if ((item.fileType === "video" || item.fileType === "audio" || item.fileType === "voice") && item.file_unique_id) {
-      // Always use built-in player (remove external player option)
-      console.log("Opening media in built-in player");
+      console.log("Opening media in built-in streaming player");
       const baseUrl = getApiBaseUrl();
+      const token = localStorage.getItem('auth_token');
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
       const mediaUrl = baseUrl 
-        ? `${baseUrl}/dl/${encodeURIComponent(item.name)}` 
-        : `/dl/${encodeURIComponent(item.name)}`;
+        ? `${baseUrl}/dl/${encodeURIComponent(item.name)}${tokenParam}` 
+        : `/dl/${encodeURIComponent(item.name)}${tokenParam}`;
       
-      // Pre-fetch the media using our authenticated API client and create an object URL
-      try {
-        const { fetchWithTimeout } = await import('@/lib/api');
-        const response = await fetchWithTimeout(mediaUrl, { method: 'GET' }, 10000);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch media: ${response.statusText}`);
-        }
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        setMediaPlayer({ 
-          url: objectUrl, 
-          fileName: item.name, 
-          fileType: item.fileType as "video" | "audio" | "voice" 
-        });
-      } catch (error) {
-        console.error('Failed to load media:', error);
-        // Fallback to direct URL (may still fail with 401)
-        setMediaPlayer({ 
-          url: mediaUrl, 
-          fileName: item.name, 
-          fileType: item.fileType as "video" | "audio" | "voice" 
-        });
-      }
+      // Open media player immediately for true progressive streaming
+      setMediaPlayer({ 
+        url: mediaUrl, 
+        fileName: item.name, 
+        fileType: item.fileType as "video" | "audio" | "voice" 
+      });
     }
   };
 
