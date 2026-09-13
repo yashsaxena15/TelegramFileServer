@@ -10,6 +10,7 @@ import re
 import secrets
 import shutil
 from typing import List, Dict, Any, Optional
+from collections import defaultdict
 from dataclasses import asdict
 
 from ..security.credentials import require_auth, User
@@ -141,7 +142,11 @@ async def rename_file_route(request: RenameFileRequest, user: User = Depends(req
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/delete")
-async def delete_file_route(request: DeleteFileRequest, user: User = Depends(require_auth)):
+async def delete_file_route(
+    http_request: Request,
+    request: DeleteFileRequest,
+    user: User = Depends(require_auth)
+):
     try:
         # Use the user's Telegram ID as the user identifier
         user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
@@ -154,6 +159,22 @@ async def delete_file_route(request: DeleteFileRequest, user: User = Depends(req
         if not file_data:
             raise HTTPException(status_code=404, detail="File not found")
         
+        # Track Telegram messages to delete: {chat_id: set([message_id, ...])}
+        messages_to_delete = defaultdict(set)
+
+        def collect_file_messages(doc):
+            if not doc:
+                return
+            c_id = doc.get("chat_id")
+            m_id = doc.get("message_id")
+            if c_id and m_id:
+                messages_to_delete[c_id].add(m_id)
+            if doc.get("is_split"):
+                for part in doc.get("parts", []):
+                    p_mid = part.get("message_id")
+                    if p_mid and c_id:
+                        messages_to_delete[c_id].add(p_mid)
+
         # Check if this is a folder
         if file_data.get("file_type") == "folder":
             # For folders, we also need to delete all files inside the folder
@@ -168,6 +189,17 @@ async def delete_file_route(request: DeleteFileRequest, user: User = Depends(req
                 paths_to_delete.append(f"{folder_path}/{folder_name}")
             
             for f_path in paths_to_delete:
+                # Find all files inside to collect their Telegram messages before deleting from DB
+                sub_files = database.Files.find({
+                    "$or": [
+                        {"file_path": f_path},
+                        {"file_path": {"$regex": f"^{re.escape(f_path)}/"}}
+                    ],
+                    "owner_id": user_id
+                })
+                for sf in sub_files:
+                    collect_file_messages(sf)
+
                 # Delete all files in the folder (owned by the user)
                 database.Files.delete_many({"file_path": f_path, "owner_id": user_id})
                 
@@ -176,12 +208,38 @@ async def delete_file_route(request: DeleteFileRequest, user: User = Depends(req
                     "file_path": {"$regex": f"^{re.escape(f_path)}/"},
                     "owner_id": user_id
                 })
+        else:
+            collect_file_messages(file_data)
         
-        # Delete the file/folder itself
+        # Delete the file/folder itself from database
         result = database.Files.delete_one({"_id": ObjectId(request.file_id), "owner_id": user_id})
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="File not found")
+        
+        # Delete Telegram message(s) from channel if any exist
+        if messages_to_delete:
+            try:
+                bot_manager = getattr(http_request.app.state, 'bot_manager', None)
+                client: Optional[Client] = bot_manager.get_least_busy_client() if (bot_manager and hasattr(bot_manager, 'get_least_busy_client')) else None
+                if not client and bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+                    client = bot_manager.client_list[0]
+                
+                if client:
+                    for c_id, m_ids in messages_to_delete.items():
+                        m_list = list(m_ids)
+                        # Telegram allows deleting up to 100 messages per call
+                        for i in range(0, len(m_list), 100):
+                            batch = m_list[i:i+100]
+                            try:
+                                await client.delete_messages(chat_id=c_id, message_ids=batch)
+                                logger.info(f"Successfully deleted Telegram messages {batch} from chat {c_id}")
+                            except Exception as tg_batch_err:
+                                logger.warning(f"Failed to delete Telegram messages {batch} from chat {c_id}: {tg_batch_err}")
+                else:
+                    logger.warning("No Telegram client available to delete message(s)")
+            except Exception as client_err:
+                logger.warning(f"Error accessing bot client for Telegram message deletion: {client_err}")
         
         return {"message": "Item deleted successfully"}
     except Exception as e:
