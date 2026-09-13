@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "9000:8000"
+      - "127.0.0.1:9000:8000"
     volumes:
       - ./src/frontend/dist:/app/src/frontend/dist
       - ./src/Backend:/app/src/Backend
