@@ -68,6 +68,8 @@ interface ContextMenuState {
   index: number;
 }
 
+export const getItemKey = (item: FileItem): string => item.id || item.file_unique_id || item.name;
+
 export const FileGrid = ({
   items,
   viewMode,
@@ -138,6 +140,21 @@ export const FileGrid = ({
     setIsSelectionMode(false);
   }, [currentFolder, currentApiPath]);
 
+  // Warn user if they try to close or refresh the page while an upload is in progress
+  useEffect(() => {
+    const isAnyUploading = Object.values(uploadProgressMap).some(f => f.status === 'uploading');
+    if (!isAnyUploading) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "An upload is in progress. Leaving or refreshing will interrupt the upload.";
+      return e.returnValue;
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [uploadProgressMap]);
+
   // Keyboard shortcuts: Escape to clear selection, Ctrl+A / Cmd+A to select all, Alt+Enter for Properties
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -154,14 +171,14 @@ export const FileGrid = ({
         }
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
         e.preventDefault();
-        const allNames = items.map(i => i.name);
-        setSelectedItems(new Set(allNames));
+        const allKeys = items.map(getItemKey);
+        setSelectedItems(new Set(allKeys));
         setIsSelectionMode(true);
       } else if (e.altKey && e.key === "Enter") {
         e.preventDefault();
         if (selectedItems.size === 1) {
-          const selectedName = Array.from(selectedItems)[0];
-          const found = items.find(i => i.name === selectedName);
+          const selectedKey = Array.from(selectedItems)[0];
+          const found = items.find(i => getItemKey(i) === selectedKey);
           if (found) {
             setPropertiesItem(found);
           }
@@ -303,8 +320,9 @@ export const FileGrid = ({
   }, [isTauri]);
 
   const openItemContextMenu = (item: FileItem, index: number, clientX?: number, clientY?: number) => {
-    if (!selectedItems.has(item.name)) {
-      setSelectedItems(new Set([item.name]));
+    const itemKey = getItemKey(item);
+    if (!selectedItems.has(itemKey)) {
+      setSelectedItems(new Set([itemKey]));
       setLastSelectedIndex(index);
     }
     setContextMenu({
@@ -422,19 +440,20 @@ export const FileGrid = ({
       const end = Math.max(lastSelectedIndex, index);
       const newSelected = new Set(selectedItems);
       for (let i = start; i <= end; i++) {
-        if (items[i]) newSelected.add(items[i].name);
+        if (items[i]) newSelected.add(getItemKey(items[i]));
       }
       setSelectedItems(newSelected);
       setIsSelectionMode(true);
       return;
     } else if (e.ctrlKey || e.metaKey) {
       // Ctrl/Cmd toggle
+      const itemKey = getItemKey(item);
       const newSelected = new Set(selectedItems);
-      if (newSelected.has(item.name)) {
-        newSelected.delete(item.name);
+      if (newSelected.has(itemKey)) {
+        newSelected.delete(itemKey);
         if (newSelected.size === 0) setIsSelectionMode(false);
       } else {
-        newSelected.add(item.name);
+        newSelected.add(itemKey);
         setIsSelectionMode(true);
       }
       setSelectedItems(newSelected);
@@ -444,12 +463,13 @@ export const FileGrid = ({
 
     // When multi-selection mode is active (activated via circle checkbox or select all)
     if (isSelectionMode && selectedItems.size > 0) {
+      const itemKey = getItemKey(item);
       const newSelected = new Set(selectedItems);
-      if (newSelected.has(item.name)) {
-        newSelected.delete(item.name);
+      if (newSelected.has(itemKey)) {
+        newSelected.delete(itemKey);
         if (newSelected.size === 0) setIsSelectionMode(false);
       } else {
-        newSelected.add(item.name);
+        newSelected.add(itemKey);
       }
       setSelectedItems(newSelected);
       setLastSelectedIndex(index);
@@ -467,14 +487,15 @@ export const FileGrid = ({
   const handleCheckboxClick = (e: React.MouseEvent, item: FileItem, index: number) => {
     e.stopPropagation();
     lastTapRef.current = null;
+    const itemKey = getItemKey(item);
     const newSelected = new Set(selectedItems);
-    if (newSelected.has(item.name)) {
-      newSelected.delete(item.name);
+    if (newSelected.has(itemKey)) {
+      newSelected.delete(itemKey);
       if (newSelected.size === 0) {
         setIsSelectionMode(false);
       }
     } else {
-      newSelected.add(item.name);
+      newSelected.add(itemKey);
       setIsSelectionMode(true);
     }
     setSelectedItems(newSelected);
@@ -487,14 +508,14 @@ export const FileGrid = ({
       setLastSelectedIndex(null);
       setIsSelectionMode(false);
     } else {
-      setSelectedItems(new Set(items.map(i => i.name)));
+      setSelectedItems(new Set(items.map(getItemKey)));
       setIsSelectionMode(true);
     }
   };
 
   const handleBatchDownload = async () => {
     const filesToDownload = items.filter(
-      item => selectedItems.has(item.name) && item.type !== "folder"
+      item => selectedItems.has(getItemKey(item)) && item.type !== "folder"
     );
 
     if (filesToDownload.length === 0) {
@@ -513,7 +534,7 @@ export const FileGrid = ({
   };
 
   const handleConfirmBatchDelete = async () => {
-    const itemsToDelete = items.filter(item => selectedItems.has(item.name));
+    const itemsToDelete = items.filter(item => selectedItems.has(getItemKey(item)));
     
     // Protect system folders in root Home
     const validItemsToDelete = itemsToDelete.filter(item => {
@@ -580,7 +601,7 @@ export const FileGrid = ({
   };
 
   const selectedFilesCount = items.filter(
-    item => selectedItems.has(item.name) && item.type !== "folder"
+    item => selectedItems.has(getItemKey(item)) && item.type !== "folder"
   ).length;
 
   const handleDragStart = (e: React.DragEvent, item: FileItem) => {
@@ -807,6 +828,16 @@ export const FileGrid = ({
         return null;
       }).filter(Boolean) as File[];
       
+      // Check if any of these files is already actively uploading
+      const duplicateUploading = filesToUpload.find(f => {
+        const fileKey = ('fullPath' in f && (f as any).fullPath) || f.name;
+        return uploadProgressMap[fileKey]?.status === 'uploading';
+      });
+      if (duplicateUploading) {
+        toast.warning(`"${duplicateUploading.name}" is already uploading! Please wait for it to complete.`);
+        return;
+      }
+
       setUploadingFiles(filesToUpload);
       
       // Import the API client
@@ -1599,8 +1630,8 @@ export const FileGrid = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const selectedName = Array.from(selectedItems)[0];
-                    const found = items.find(i => i.name === selectedName);
+                    const selectedKey = Array.from(selectedItems)[0];
+                    const found = items.find(i => getItemKey(i) === selectedKey);
                     if (found) {
                       setPropertiesItem(found);
                     }
@@ -1633,14 +1664,15 @@ export const FileGrid = ({
             className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-9 2xl:grid-cols-12 gap-2 sm:gap-1.5"
           >
             {items.map((item, index) => {
+              const itemKey = getItemKey(item);
               const isRenaming = renamingItem?.index === index;
-              const isDragging = draggedItem?.name === item.name;
+              const isDragging = (draggedItem?.id && item.id) ? draggedItem.id === item.id : draggedItem?.name === item.name;
               const isCut = cutItem?.name === item.name && cutItem?.id === item.id; // Check if this item is cut
-              const isSelected = selectedItems.has(item.name);
+              const isSelected = selectedItems.has(itemKey);
 
               return (
                 <div
-                  key={index}
+                  key={itemKey || index}
                   draggable={!isRenaming}
                   onDragStart={(e) => handleDragStart(e, item)}
                   onDragEnd={handleDragEnd}
@@ -1652,8 +1684,8 @@ export const FileGrid = ({
                     // Additional prevention of default context menu
                     e.nativeEvent.preventDefault();
                     if (!isRenaming) {
-                      if (!selectedItems.has(item.name)) {
-                        setSelectedItems(new Set([item.name]));
+                      if (!selectedItems.has(itemKey)) {
+                        setSelectedItems(new Set([itemKey]));
                         setLastSelectedIndex(index);
                       }
                       handleContextMenu(e, item, index);
@@ -1772,14 +1804,15 @@ export const FileGrid = ({
             </div>
             <div className="space-y-1 sm:space-y-0.5">
               {items.map((item, index) => {
+                const itemKey = getItemKey(item);
                 const isRenaming = renamingItem?.index === index;
-                const isDragging = draggedItem?.name === item.name;
+                const isDragging = (draggedItem?.id && item.id) ? draggedItem.id === item.id : draggedItem?.name === item.name;
                 const isCut = cutItem?.name === item.name && cutItem?.id === item.id; // Check if this item is cut
-                const isSelected = selectedItems.has(item.name);
+                const isSelected = selectedItems.has(itemKey);
 
                 return (
                   <div
-                    key={index}
+                    key={itemKey || index}
                     draggable={!isRenaming}
                     onDragStart={(e) => handleDragStart(e, item)}
                     onDragEnd={handleDragEnd}
@@ -1789,8 +1822,8 @@ export const FileGrid = ({
                       if (!isRenaming) {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (!selectedItems.has(item.name)) {
-                          setSelectedItems(new Set([item.name]));
+                        if (!selectedItems.has(itemKey)) {
+                          setSelectedItems(new Set([itemKey]));
                           setLastSelectedIndex(index);
                         }
                         handleContextMenu(e, item, index);
