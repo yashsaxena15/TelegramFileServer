@@ -37,6 +37,11 @@ interface ContextMenuProps {
   hasClipboard?: () => boolean; // Add prop to track if there's clipboard content
   disableDelete?: boolean; // Add prop to disable delete option
   onProperties?: () => void; // Add prop to view properties
+  onInspectArchive?: () => void; // Peek inside ZIP
+  onExtractArchive?: () => void; // Extract ZIP in cloud
+  onCompress?: () => void; // Compress to ZIP
+  isArchive?: boolean; // Is current item a zip/archive?
+  selectedCount?: number; // Number of selected items
 }
 
 interface MenuItem {
@@ -68,6 +73,11 @@ export const ContextMenu = ({
   hasClipboard, // Destructure the new prop
   disableDelete = false, // Destructure the new prop with default value
   onProperties,
+  onInspectArchive,
+  onExtractArchive,
+  onCompress,
+  isArchive = false,
+  selectedCount = 1,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
@@ -145,6 +155,18 @@ export const ContextMenu = ({
         onProperties?.();
         onClose();
         break;
+      case "inspect_archive":
+        onInspectArchive?.();
+        onClose();
+        break;
+      case "extract_archive":
+        onExtractArchive?.();
+        onClose();
+        break;
+      case "compress":
+        onCompress?.();
+        onClose();
+        break;
       default:
         onClose();
     }
@@ -186,6 +208,27 @@ export const ContextMenu = ({
         icon: Download,
         label: "Download",
         action: "download",
+      },
+      ...(isArchive
+        ? [
+            { divider: true, label: "", action: "" },
+            {
+              icon: Eye,
+              label: "Peek Inside Archive",
+              action: "inspect_archive",
+            },
+            {
+              icon: Archive,
+              label: "Extract to Cloud",
+              action: "extract_archive",
+            },
+          ]
+        : []),
+      { divider: true, label: "", action: "" },
+      {
+        icon: Archive,
+        label: selectedCount > 1 ? `Compress to ZIP (${selectedCount})` : "Compress to ZIP",
+        action: "compress",
       },
       { divider: true, label: "", action: "" },
       {

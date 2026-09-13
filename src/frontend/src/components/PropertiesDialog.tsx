@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FileItem, getFileIcon } from "@/components/types";
 import {
   Dialog,
@@ -19,7 +19,7 @@ import {
   Link as LinkIcon,
   Info,
 } from "lucide-react";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { toast } from "sonner";
 
 interface PropertiesDialogProps {
@@ -40,6 +40,44 @@ export const PropertiesDialog = ({
   onDownload,
 }: PropertiesDialogProps) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [folderStats, setFolderStats] = useState<{
+    total_files: number;
+    total_subfolders: number;
+    total_size: number;
+  } | null>(null);
+  const [isLoadingFolderStats, setIsLoadingFolderStats] = useState(false);
+
+  useEffect(() => {
+    if (open && item && item.type === "folder") {
+      setIsLoadingFolderStats(true);
+      setFolderStats(null);
+      const baseUrl = getApiBaseUrl();
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
+      const param = item.id
+        ? `id=${encodeURIComponent(item.id)}`
+        : `path=${encodeURIComponent(item.file_path ? `${item.file_path}/${item.name}` : `/Home/${item.name}`)}`;
+
+      fetchWithTimeout(`${baseUrl || ""}/folders/stats?${param}${tokenParam}`, {
+        credentials: "include",
+      }, 6000)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) {
+            setFolderStats(data);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to fetch folder stats:", err);
+        })
+        .finally(() => {
+          setIsLoadingFolderStats(false);
+        });
+    } else {
+      setFolderStats(null);
+      setIsLoadingFolderStats(false);
+    }
+  }, [open, item]);
 
   if (!item) return null;
 
@@ -131,7 +169,7 @@ export const PropertiesDialog = ({
               <span className="col-span-2 font-medium text-foreground break-all">{getLocationPath()}</span>
             </div>
 
-            {item.type !== "folder" && (
+            {item.type !== "folder" ? (
               <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-border/40">
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <HardDrive className="w-3.5 h-3.5" /> Size:
@@ -141,6 +179,50 @@ export const PropertiesDialog = ({
                   {item.size ? ` (${item.size.toLocaleString()} bytes)` : ""}
                 </span>
               </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-border/40">
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <HardDrive className="w-3.5 h-3.5" /> Size:
+                  </span>
+                  <span className="col-span-2 font-medium text-foreground">
+                    {isLoadingFolderStats ? (
+                      <span className="text-xs text-muted-foreground italic animate-pulse">Calculating size...</span>
+                    ) : folderStats ? (
+                      <>
+                        {formatFileSize(folderStats.total_size)}
+                        <span className="text-muted-foreground font-normal text-xs ml-1">
+                          ({folderStats.total_size.toLocaleString()} bytes)
+                        </span>
+                      </>
+                    ) : (
+                      "0 Bytes"
+                    )}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-border/40">
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5" /> Contains:
+                  </span>
+                  <span className="col-span-2 font-medium text-foreground">
+                    {isLoadingFolderStats ? (
+                      <span className="text-xs text-muted-foreground italic animate-pulse">Counting files...</span>
+                    ) : folderStats ? (
+                      <span>
+                        {folderStats.total_files} {folderStats.total_files === 1 ? "file" : "files"}
+                        {folderStats.total_subfolders > 0 && (
+                          <span className="text-muted-foreground ml-1">
+                            , {folderStats.total_subfolders} {folderStats.total_subfolders === 1 ? "subfolder" : "subfolders"}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      "0 files"
+                    )}
+                  </span>
+                </div>
+              </>
             )}
 
             <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-border/40">
@@ -212,7 +294,7 @@ export const PropertiesDialog = ({
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-border/60">
-          {item.type !== "folder" && onDownload && (
+          {onDownload && (
             <button
               type="button"
               onClick={() => {

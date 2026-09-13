@@ -36,6 +36,8 @@ from .routes.files_routes import router as files_router
 from .routes.folders_routes import router as folders_router
 from .routes.system_routes import router as system_router
 from .routes.user_routes import router as user_router
+from .routes.media_routes import router as media_router
+from .routes.archive_routes import router as archive_router
 from .routes.frontend_routes import router as frontend_router
 # Import exception handlers
 from .routes.error_handlers import exception_handlers
@@ -80,7 +82,7 @@ async def startup_event():
 # For localhost development, we need to handle cookies properly
 app.add_middleware(
     SessionMiddleware, 
-    secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0",
+    secret_key=os.getenv("SESSION_SECRET_KEY", "f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0"),
     same_site="lax",     # Use lax for better compatibility with browsers in development
     https_only=False,     # Allow non-HTTPS for localhost and IP deployments
     max_age=3600,         # 1 hour session timeout
@@ -135,6 +137,8 @@ app.include_router(folders_router)
 app.include_router(system_router)
 app.include_router(user_router)
 app.include_router(stream_router)
+app.include_router(media_router)
+app.include_router(archive_router)
 app.include_router(telegram_router)
 app.mount("/assets", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist", "assets")), name="assets")
 # Register exception handlers

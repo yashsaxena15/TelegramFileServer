@@ -1,98 +1,98 @@
-import { useState, useEffect, useRef } from "react";
-import { X } from "lucide-react";
+import { useState, useEffect } from "react";
+import Lightbox from "yet-another-react-lightbox";
+import "yet-another-react-lightbox/styles.css";
+
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
+import "yet-another-react-lightbox/plugins/thumbnails.css";
+import Slideshow from "yet-another-react-lightbox/plugins/slideshow";
+import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
+import Download from "yet-another-react-lightbox/plugins/download";
+import Counter from "yet-another-react-lightbox/plugins/counter";
+import "yet-another-react-lightbox/plugins/counter.css";
+
+export interface ImageSlideItem {
+  url: string;
+  fileName: string;
+}
 
 interface ImageViewerProps {
-  imageUrl: string;
-  fileName: string;
+  imageUrl?: string;
+  fileName?: string;
+  images?: ImageSlideItem[];
+  initialIndex?: number;
   onClose: () => void;
 }
 
-export const ImageViewer = ({ imageUrl, fileName, onClose }: ImageViewerProps) => {
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const viewerRef = useRef<HTMLDivElement>(null);
+export const ImageViewer = ({
+  imageUrl,
+  fileName,
+  images,
+  initialIndex = 0,
+  onClose
+}: ImageViewerProps) => {
+  // Construct slides list
+  const slides = (images && images.length > 0)
+    ? images.map(img => ({
+        src: img.url,
+        title: img.fileName,
+        download: `${img.url}&download=1`,
+      }))
+    : imageUrl
+      ? [{ src: imageUrl, title: fileName || "Image", download: `${imageUrl}&download=1` }]
+      : [];
+
+  const [index, setIndex] = useState(initialIndex);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    };
+    setIndex(initialIndex);
+  }, [initialIndex]);
 
-    const handleClickOutside = (e: MouseEvent) => {
-      if (viewerRef.current && e.target === viewerRef.current) {
-        onClose();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [onClose]);
-
-  const handleImageLoad = () => {
-    setIsLoading(false);
-  };
-
-  const handleImageError = () => {
-    setIsLoading(false);
-    setError(true);
-  };
-
-  const handleClose = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onClose();
-  };
+  if (slides.length === 0) return null;
 
   return (
-    <div 
-      ref={viewerRef}
-      className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4"
-    >
-      <button
-        onClick={handleClose}
-        className="absolute top-4 right-4 text-white hover:text-gray-300 transition-colors z-20"
-        aria-label="Close viewer"
-      >
-        <X size={32} />
-      </button>
-      
-      <div className="text-white absolute top-4 left-4 right-14 text-base sm:text-lg font-semibold z-10 truncate">
-        {fileName}
-      </div>
-      
-      <div className="relative flex items-center justify-center w-full h-full">
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center z-10">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
-          </div>
-        )}
-        
-        {error ? (
-          <div className="text-white text-center z-10">
-            <p className="text-xl mb-2">Failed to load image</p>
-            <p className="text-gray-300">The image could not be loaded.</p>
-            <button
-              onClick={onClose}
-              className="mt-4 px-4 py-2 bg-white text-black rounded hover:bg-gray-200 transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        ) : (
-          <img
-            src={imageUrl}
-            alt={fileName}
-            className="max-w-full max-h-full object-contain"
-            onLoad={handleImageLoad}
-            onError={handleImageError}
-            style={{ display: isLoading ? "none" : "block" }}
-          />
-        )}
-      </div>
-    </div>
+    <Lightbox
+      open={true}
+      close={onClose}
+      index={index}
+      slides={slides}
+      on={{
+        view: ({ index: newIndex }) => setIndex(newIndex),
+      }}
+      plugins={[Zoom, Thumbnails, Slideshow, Fullscreen, Download, Counter]}
+      zoom={{
+        maxZoomPixelRatio: 5,
+        zoomInMultiplier: 1.5,
+        doubleTapDelay: 300,
+        doubleClickDelay: 300,
+        doubleClickMaxStops: 2,
+        keyboardMoveDistance: 50,
+        wheelZoomDistanceFactor: 100,
+        pinchZoomDistanceFactor: 100,
+        scrollToZoom: true,
+      }}
+      thumbnails={{
+        position: "bottom",
+        width: 80,
+        height: 50,
+        border: 2,
+        borderRadius: 4,
+        padding: 4,
+        gap: 8,
+        showToggle: true,
+      }}
+      slideshow={{
+        autoplay: false,
+        delay: 3000,
+      }}
+      carousel={{
+        finite: false,
+        preload: 2,
+      }}
+      render={{
+        buttonPrev: slides.length <= 1 ? () => null : undefined,
+        buttonNext: slides.length <= 1 ? () => null : undefined,
+      }}
+    />
   );
 };

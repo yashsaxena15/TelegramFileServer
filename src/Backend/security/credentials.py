@@ -4,8 +4,9 @@ from typing import Optional
 import hashlib
 import logging
 from google.oauth2 import id_token
+import os
 from google.auth.transport import requests as google_requests
-from src.Config import GOOGLE_CLIENT_ID, AUTHORIZED_ADMIN_EMAILS
+from src.Config import GOOGLE_CLIENT_ID
 from src.Database import database
 from pydantic import BaseModel
 from typing import Optional
@@ -23,13 +24,14 @@ class User(BaseModel):
     telegram_last_name: Optional[str] = None
     telegram_profile_picture: Optional[str] = None
 
-# Admin credentials
-USERNAME = "admin"
-PASSWORD = "password"
+# Admin credentials (configurable via .env: DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD)
+USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
+PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "password")
 ADMIN_PASSWORD_HASH = hashlib.sha256(PASSWORD.encode()).hexdigest()
 
-# List of authorized admin emails (from config)
-AUTHORIZED_ADMINS = AUTHORIZED_ADMIN_EMAILS
+# List of authorized admin emails (configurable via .env: AUTHORIZED_ADMIN_EMAILS)
+_raw_admin_emails = os.getenv("AUTHORIZED_ADMIN_EMAILS", "")
+AUTHORIZED_ADMINS = [e.strip() for e in _raw_admin_emails.split(",") if e.strip()]
 
 security = HTTPBearer(auto_error=False)
 

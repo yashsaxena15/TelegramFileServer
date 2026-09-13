@@ -14,6 +14,7 @@ services:
     volumes:
       - ./src/frontend/dist:/app/src/frontend/dist
       - ./src/Backend:/app/src/Backend
+      - ./src/Config:/app/src/Config
       - ./.env:/app/.env
     depends_on:
       - mongo

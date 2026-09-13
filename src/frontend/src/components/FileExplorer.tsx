@@ -28,6 +28,7 @@ import DownloadQueue from "./DownloadQueue";
 import { downloadManager } from "@/lib/downloadManager";
 import { motion, AnimatePresence } from "framer-motion";
 import { useError } from "@/contexts/ErrorHandlerContext"; // Import the error context
+import { FolderDownloadDialog, FolderDownloadInfo, FolderPartInfo } from "./FolderDownloadDialog";
 
 export const FileExplorer = () => {
   const location = useLocation();
@@ -79,7 +80,9 @@ export const FileExplorer = () => {
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemType: "file" | "folder" | "empty"; itemName: string; item?: FileItem; index?: number } | null>(null);  const queryClient = useQueryClient();
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemType: "file" | "folder" | "empty"; itemName: string; item?: FileItem; index?: number } | null>(null);
+  const [folderDownloadInfo, setFolderDownloadInfo] = useState<FolderDownloadInfo | null>(null);
+  const queryClient = useQueryClient();
 
   // Handle clicks outside the download widget to close it
   useEffect(() => {
@@ -552,9 +555,67 @@ export const FileExplorer = () => {
     }
   };
 
+  const handleDownloadFolderPart = (part: FolderPartInfo) => {
+    const baseUrl = getApiBaseUrl();
+    const downloadUrl = part.download_url.startsWith('http')
+      ? part.download_url
+      : `${baseUrl || ''}${part.download_url}`;
+    downloadManager.addDownload(downloadUrl, part.name);
+    toast.success(`Started download for ${part.name}`);
+  };
+
+  const handleDownloadAllFolderParts = (parts: FolderPartInfo[]) => {
+    const baseUrl = getApiBaseUrl();
+    parts.forEach((part, index) => {
+      setTimeout(() => {
+        const downloadUrl = part.download_url.startsWith('http')
+          ? part.download_url
+          : `${baseUrl || ''}${part.download_url}`;
+        downloadManager.addDownload(downloadUrl, part.name);
+      }, index * 400);
+    });
+    toast.success(`Queued ${parts.length} parts for download`);
+  };
+
   const handleDownload = async (item: FileItem) => {
     try {
       const baseUrl = getApiBaseUrl();
+
+      if (item.type === "folder") {
+        toast.info(`Preparing zip for "${item.name}"...`);
+        const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
+        const param = item.id
+          ? `id=${encodeURIComponent(item.id)}`
+          : `path=${encodeURIComponent(item.file_path ? `${item.file_path}/${item.name}` : (currentApiPath ? `${currentApiPath}/${item.name}` : `/Home/${item.name}`))}`;
+
+        const response = await fetchWithTimeout(
+          `${baseUrl || ""}/folders/download-info?${param}${tokenParam}`,
+          { credentials: "include" }
+        );
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.detail || `Failed to prepare folder download: ${response.status}`);
+        }
+
+        const info: FolderDownloadInfo = await response.json();
+        if (!info.parts || info.parts.length === 0) {
+          toast.warning("Folder is empty or has no files to download.");
+          return;
+        }
+
+        if (info.parts.length === 1) {
+          // Single part (<= 2GB), start download directly
+          const part = info.parts[0];
+          handleDownloadFolderPart(part);
+        } else {
+          // Multiple parts (> 2GB), show part selection dialog
+          setFolderDownloadInfo(info);
+        }
+        return;
+      }
+
       console.log('[FileExplorer] handleDownload - baseUrl:', baseUrl);
       
       // Construct the download URL - for the new path structure, we just need the file name
@@ -572,9 +633,9 @@ export const FileExplorer = () => {
       
       // The download is now handled by the download manager's queue system
       // We don't need to call downloadFile directly
-    } catch (error) {
+    } catch (error: any) {
       logger.error("Failed to download file:", error);
-      toast.error("Failed to download file");
+      toast.error(error.message || "Failed to download file");
     }
   };
 
@@ -825,6 +886,14 @@ export const FileExplorer = () => {
         currentPath={currentApiPath}  // Pass the full path, not just the folder name
         onClose={() => setNewFolderDialogOpen(false)}
         onConfirm={handleNewFolder}
+      />
+
+      <FolderDownloadDialog
+        open={!!folderDownloadInfo}
+        info={folderDownloadInfo}
+        onClose={() => setFolderDownloadInfo(null)}
+        onDownloadPart={handleDownloadFolderPart}
+        onDownloadAll={handleDownloadAllFolderParts}
       />
 
       {contextMenu && (

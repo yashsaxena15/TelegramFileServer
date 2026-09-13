@@ -1,284 +1,196 @@
-# Telegram File Server
+# Telegram File Server 🚀
 
-Telegram File Server is a powerful, self-hosted media server application that integrates with Telegram bots to provide file storage, organization, and streaming capabilities through a web interface. It now supports multi-user access with per-file ownership and access control.
+A modern, high-performance, self-hosted Cloud Storage and Media Streaming Server powered by **FastAPI**, **React (TypeScript & Vite)**, **MongoDB**, **Pyrogram**, and **FFmpeg**. It transforms your private Telegram channels and groups into an unlimited personal cloud drive with Google Drive-like streaming, folder downloads, and file management.
 
-## Features
+---
 
-- **Telegram Integration**: Uses Pyrogram to connect with Telegram bots for file management
-- **Web Interface**: Modern React frontend with TypeScript and TailwindCSS
-- **File Management**: Organize files in folders, search, and filter by type
-- **Media Streaming**: Built-in support for streaming videos, images, documents, and audio
-- **Authentication**: Secure login with local accounts or Google OAuth
-- **Multi-User Support**: Per-file ownership and access control
-- **Database Storage**: MongoDB integration for storing file metadata
-- **Auto Updates**: GitHub webhook support for automatic deployment updates
-- **Multi-Bot Support**: Manage multiple Telegram bots from a single interface
+## ✨ Key Features
 
-## Architecture
+### 🎬 Advanced Media Player & Streaming
+- **Dynamic Multi-Resolution Ladder**: Switch between **4K (2160p)**, **2K (1440p)**, **1080p**, **720p**, **480p**, **360p**, **240p**, and **144p** on-the-fly.
+  - *Intelligent Ladder Capping*: The player probes the native video resolution and automatically caps the menu so lower-resolution videos never show upscale options.
+  - *Zero-CPU Direct Streaming*: **Auto (Original)** streams raw video directly from Telegram storage using HTTP Range Requests (`bytes=...`) at **0% server CPU**.
+  - *Lightweight VPS Transcoding*: Downscaled resolutions use single-thread ultrafast encoding with aggressive CPU protections.
+- **Multi-Audio Track Switching**: Full support for multi-language movies and shows (e.g., English ↔ Hindi). Remuxes audio streams on-the-fly while copying video frames (`-c:v copy`), preserving 100% video quality with near-zero CPU usage.
+- **Subtitles & Closed Captions (CC)**:
+  - *Embedded Subtitle Extraction*: Automatically extracts embedded `.srt` / `.subrip` subtitle streams into standard WebVTT format on-the-fly.
+  - *Custom Subtitle Upload*: Drag-and-drop or select any external `.srt` or `.vtt` file directly in the web player.
+- **Timeline & Seek Synchronization**:
+  - *Master Duration Shielding*: Prevents chunked fragmented MP4 streams from corrupting total movie duration.
+  - *Stream Offset Tracking (`streamStartTime`)*: Eliminates timeline drift and progress bar jumping when switching qualities or audio tracks.
+  - *Dual-Mode Seeking*: Smooth 60fps scrubbing with native HTTP Range seeking for direct streams and timestamp-offset restarts for transcoded streams.
+  - *Cross-Platform Compatibility*: Fully responsive touch scrubbing, double-tap seek (±10s), keyboard shortcuts (Space, K, J, L, Arrow keys), and native Fullscreen.
+- **External Player Integration**: Launch any stream directly into **VLC Media Player** (`vlc://`), **MX Player** / Android intent (`intent://`), or copy direct stream links with one click.
 
-The application consists of three main components:
+### 📚 In-Browser Document & E-Book Readers
+- **PDF Viewer**: Embedded native PDF reader with zoom, page jump, and text search directly in the browser.
+- **EPUB E-Book Reader**: Interactive reader with Table of Contents (TOC), page flip, font size controls, and reading progress.
+- **Comic & Manga Reader (.cbz / .cbr)**: In-memory image unpacking supporting both **Webtoon continuous vertical scroll** and **Manga page-flip spread**.
+- **Word Document (.docx) Preview**: Pure client-side Word document rendering to HTML DOM with 100% privacy.
+- **Markdown & Code Viewer**: GitHub-flavored Markdown rendering and syntax-highlighted code viewer (`.py`, `.js`, `.ts`, `.json`, `.html`, `.css`, `.sh`, `.yml`, `.sql`, `.log`, `.txt`) with line formatting and 1-click copy.
 
-1. **Backend Server** (FastAPI):
-   - REST API for file operations
-   - Telegram bot management
-   - Authentication system
-   - MongoDB integration
+### 🖼️ Advanced Image Lightbox Gallery
+- **Folder Gallery Browsing**: Swipe or use keyboard arrow keys to browse through all images in the folder.
+- **Pinch, Zoom & Pan**: Deep zoom up to 5x with mouse wheel, pinch-to-zoom, and drag panning.
+- **Bottom Thumbnail Strip**: Interactive carousel strip to quickly jump between photos.
+- **Tools**: Fullscreen, auto-play slideshow, and direct download.
 
-2. **Frontend Interface** (React/Vite):
-   - File explorer UI with grid/list views
-   - Folder navigation and breadcrumb support
-   - File operations (copy, move, delete, rename)
-   - Responsive design with dark/light mode
+### 🗜️ Cloud Zip & Archive Operations (Zero Client Bandwidth)
+- **Archive Inspector ("Peek Inside")**: Inspect the full directory tree, file sizes, and dates inside any `.zip` archive without extracting.
+- **Cloud-Side Extraction**: Extract entire ZIP archives directly into your Telegram storage channel without downloading files to your computer or phone.
+- **Cloud-Side Compression**: Select any files and folders and click **Compress to ZIP** to create a new archive directly in the cloud.
 
-3. **Telegram Bots** (Pyrogram):
-   - File upload/download from Telegram
-   - Media organization and categorization
-   - User interaction through commands
+### 📁 Google Drive-Style File & Folder Management
+- **On-the-Fly Folder Zip Streaming**: Download entire folders as `.zip` archives generated dynamically in memory without saving intermediate files to the server's disk.
+- **2GB Multi-Part Auto-Splitting**: For large folders exceeding 2GB (e.g., a 2.8GB folder), downloads are automatically split into manageable parts (Part 1 = 2GB, Part 2 = 800MB) with an interactive download dialog.
+- **Folder Properties Dialog**: Instantly inspect recursive statistics for any folder, including total recursive file count and human-readable aggregate size.
+- **Bi-Directional Telegram Sync**: Deleting files or folders in the web UI automatically removes the corresponding messages from your Telegram channels to prevent orphaned files.
+- **Multi-Selection & Batch Actions**: Select multiple files or folders for bulk deletion, movement, or downloading.
 
-## Frontend Repository
+### 👥 Authentication & Multi-Bot Architecture
+- **Dual Authentication**:
+  - *Local Accounts*: Built-in username/password authentication with configurable admin credentials.
+  - *Google OAuth 2.0*: Sign in with Google with whitelist access via `AUTHORIZED_ADMIN_EMAILS`.
+- **Multi-Bot Worker Pool**: Scale downloads and streaming concurrency across up to 20 Telegram bots (`TOKEN0` to `TOKEN19`) using intelligent round-robin and least-busy client scheduling.
+- **MongoDB Caching**: Fast persistent caching of probed media metadata (codecs, resolutions, audio tracks, subtitles) to deliver instantaneous player initialization.
 
-The frontend is maintained as a separate repository and included in this project as a git submodule:
-- Repository: https://github.com/pamod-madubashana/FileServerApp
-- Location: `src/frontend`
+---
 
-To initialize the submodule, run:
-```bash
-git submodule update --init --recursive
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    Client["Client (Browser / Mobile / Desktop)"]
+    FastAPI["FastAPI Backend Server (:8000)"]
+    Frontend["React + Vite UI (TailwindCSS)"]
+    FFmpeg["FFmpeg & FFprobe Engine"]
+    MongoDB[("MongoDB (Metadata & Sessions)")]
+    BotManager["Multi-Bot Worker Pool (Pyrogram)"]
+    Telegram[("Telegram Cloud Storage")]
+
+    Client <-->|REST API / Stream| FastAPI
+    Client <-->|Static Assets| Frontend
+    FastAPI <-->|Probe / Transcode / Subtitles| FFmpeg
+    FastAPI <-->|User & File Metadata| MongoDB
+    FastAPI <-->|Download / Upload / Stream Parts| BotManager
+    BotManager <-->|MTProto (8+ Bot Clients)| Telegram
 ```
 
-## Windows Desktop Application
+---
 
-A Windows desktop application is available, built with Tauri:
-- Version: v1.0.1
-- Features:
-  - Cross-platform file downloads (browser and desktop)
-  - Advanced download management with progress tracking
-  - File browsing and organization
-  - User authentication and profile management
-  - Multi-user file access control
-  - Settings customization
+## 🚀 Quick Start (Docker Recommended)
 
-### Download Links
+### 1. Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/)
+- Telegram API credentials (`API_ID` & `API_HASH` from [my.telegram.org](https://my.telegram.org))
+- At least one Telegram bot token from [@BotFather](https://t.me/BotFather)
 
-- [Windows Executable (.exe)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/telegram-file-server.exe)
-- [Windows Installer (.exe)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_x64-setup.exe)
+### 2. Clone the Repository
+```bash
+git clone https://github.com/yashsaxena15/TelegramFileServer.git
+cd TelegramFileServer
+```
 
-## Linux and macOS Desktop Applications
+### 3. Configure Environment Variables
+Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
+```
+Edit `.env` with your favorite text editor:
+```env
+API_ID=12345678
+API_HASH=your_telegram_api_hash
+OWNER=your_telegram_user_id
+TOKEN0=1245345768:your_primary_bot_token
+DATABASE_URL=mongodb://mongo:27017/TelegramFileServer
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=your_secure_password
+```
 
-Desktop applications are also available for Linux and macOS, built with Tauri:
+### 4. Build and Run
+```bash
+docker compose up -d --build
+```
+Access the web dashboard at: **`http://localhost:9000`** (or `http://localhost:8000` if bound directly).
 
-### Download Links
+---
 
-- [RPM Package (.rpm)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server-0.1.0-1.x86_64.rpm)
-- [DEB Package (.deb)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_amd64.deb)
-- [AppImage (.AppImage)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_amd64.AppImage)
-- [macOS Disk Image (.dmg)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_aarch64.dmg)
-
-## Installation
+## 💻 Manual Installation (Without Docker)
 
 ### Prerequisites
-
 - Python 3.12+
-- Node.js 16+
-- MongoDB
-- Telegram API credentials
+- Node.js 18+ and `npm`
+- FFmpeg & FFprobe (`sudo apt-get install -y ffmpeg`)
+- MongoDB 6.0+ instance running locally or on MongoDB Atlas
 
-### Quick Setup
-
-1. Clone the repository with submodules:
-   ```bash
-   git clone --recurse-submodules <repository-url>
-   cd fileServer
-   ```
-
-2. If you've already cloned the repository without submodules, initialize them:
-   ```bash
-   git submodule update --init --recursive
-   ```
-
-3. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Install frontend dependencies:
-   ```bash
-   cd src/frontend
-   npm install
-   ```
-
-5. Set up environment variables:
-   Copy `.env.example` to `.env` and configure your settings:
-   ```
-   API_ID=your_telegram_api_id
-   API_HASH=your_telegram_api_hash
-   TOKEN0=your_bot_token
-   DATABASE_URL=your_mongodb_connection_string
-   ```
-
-6. Run the application:
-   ```bash
-   python __main__.py
-   ```
-
-### Production Deployment
-
-#### Using Systemd (Linux)
-
-Run the installation script to set up a systemd service:
+### 1. Backend Setup
 ```bash
-chmod +x install.sh
-./install.sh
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
-This creates a service named `telegram-file-server` that can be managed with:
-```bash
-tgserver start     # Start the service
-tgserver stop      # Stop the service
-tgserver restart   # Restart the service
-tgserver status    # Check service status
-tgserver logs      # View live logs
-```
-
-#### Using Docker
-
-Build and run with Docker:
-```bash
-docker build -t telegram-file-server .
-docker run -p 8000:8000 telegram-file-server
-```
-
-#### Heroku Deployment
-
-The application supports Heroku deployment through the provided `app.json` and `heroku.yml`.
-
-## Multi-User Model
-
-The Telegram File Server now supports multiple users with per-file ownership and access control:
-
-- Each file and folder is associated with an owner (user ID)
-- Users can only access files they own
-- Files uploaded via Telegram are associated with the Telegram account owner
-- All file operations (view, move, copy, delete, rename) are restricted to owners
-- Admin users can access all files
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `API_ID` | Telegram API ID | Yes |
-| `API_HASH` | Telegram API Hash | Yes |
-| `TOKEN0` | Primary bot token | Yes |
-| `DATABASE_URL` | MongoDB connection string | Yes |
-| `OWNER` | Owner user ID | No |
-| `PORT` | Web server port (default: 8000) | No |
-| `GOOGLE_CLIENT_ID` | For Google OAuth | No |
-| `GOOGLE_CLIENT_SECRET` | For Google OAuth | No |
-
-Additional bot tokens can be added as `TOKEN1`, `TOKEN2`, etc.
-
-## Usage
-
-### Web Interface
-
-After starting the server, access the web interface at `http://localhost:8000` (or your configured port).
-
-Features include:
-- File browsing with folder navigation
-- Virtual folders for media types (Images, Videos, Documents, Audio)
-- Search functionality
-- File operations (create folder, copy, move, etc.)
-
-### Telegram Commands
-
-The bot supports various commands for file management:
-- `/start` - Welcome message
-- File upload/download through Telegram
-
-### API Endpoints
-
-- `GET /` - Application information
-- `POST /api/auth/login` - User authentication
-- `GET /api/files` - List files in a path (filtered by owner)
-- `POST /api/folders/create` - Create a new folder (assigned to current user)
-- `GET /api/bots/info` - Get bot information
-
-All file operations are restricted to the owner of the files. Full API documentation is available at `/docs` when the server is running.
-
-## Development
-
-### Backend Development
-
-The backend is written in Python using FastAPI. Key directories:
-- `src/Backend/` - Web server implementation
-- `src/Database/` - MongoDB models and connections
-- `src/Telegram/` - Bot implementations
-- `src/Config/` - Configuration files
-
-### Frontend Development
-
-The frontend uses React with Vite and is located in the `src/frontend` directory:
+### 2. Frontend Setup
 ```bash
 cd src/frontend
-npm run dev  # Start development server
-npm run build  # Build for production
+npm install
+npm run build
+cd ../..
 ```
 
-Key directories:
-- `src/frontend/src/components/` - React components
-- `src/frontend/src/hooks/` - Custom React hooks
-- `src/frontend/src/pages/` - Page components
-- `src/frontend/src/lib/` - Utility functions
+### 3. Start the Application
+```bash
+python __main__.py
+```
 
-The frontend is a submodule repository hosted at https://github.com/pamod-madubashana/FileServerApp
+---
 
-### Building the Windows Desktop App
+## ⚙️ Environment Variables Reference
 
-To build the Windows desktop application using Tauri:
+| Variable | Description | Required | Default |
+|:---|:---|:---:|:---|
+| `API_ID` | Telegram API ID from [my.telegram.org](https://my.telegram.org) | **Yes** | — |
+| `API_HASH` | Telegram API Hash from [my.telegram.org](https://my.telegram.org) | **Yes** | — |
+| `OWNER` | Telegram Numerical User ID of the primary administrator | **Yes** | — |
+| `TOKEN0` | Primary Telegram Bot Token from [@BotFather](https://t.me/BotFather) | **Yes** | — |
+| `TOKEN1`..`TOKEN19` | Additional bot tokens for concurrent download pooling | No | — |
+| `LOGGER_BOT` | Bot token dedicated for logging system events | No | `TOKEN0` |
+| `DATABASE_URL` | MongoDB connection string (local or MongoDB Atlas) | **Yes** | `mongodb://mongo:27017` |
+| `PORT` | Web server listening port | No | `8000` |
+| `HOST` | Web server bind address | No | `0.0.0.0` |
+| `WEB_APP` | Public URL / Reverse Proxy URL of the web server | No | `http://localhost:8000` |
+| `SESSION_SECRET_KEY` | Secret key for signing session cookies | No | Auto-configured |
+| `DEFAULT_ADMIN_USERNAME` | Default local admin username | No | `admin` |
+| `DEFAULT_ADMIN_PASSWORD` | Default local admin password | No | `password` |
+| `AUTHORIZED_ADMIN_EMAILS` | Comma-separated list of Google OAuth admin emails | No | — |
+| `GOOGLE_CLIENT_ID` | Google OAuth Client ID for Google Sign-In | No | — |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth Client Secret | No | — |
+| `LOGS` | Telegram channel ID for storing activity logs | No | — |
+| `MOVIE` / `MOVIE_GRP` | Telegram channel IDs for categorized media indexing | No | — |
+| `FILTER_CHAT` | Telegram channel ID for filter bot storage | No | — |
 
-1. Navigate to the frontend directory:
-   ```bash
-   cd src/frontend
-   ```
+---
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+## 🛠️ API Overview
 
-3. Install Tauri CLI globally:
-   ```bash
-   npm install -g @tauri-apps/cli
-   ```
+- **`GET /dl/{file_name}`**: High-speed direct media streaming supporting HTTP/1.1 Range Requests.
+- **`GET /media/info/{file_name}`**: Probe video resolution, audio tracks, and embedded subtitles.
+- **`GET /media/stream/{file_name}`**: Dynamic on-the-fly resolution downscaling and audio track remuxing.
+- **`GET /media/subtitles/{file_name}`**: Real-time extraction of embedded subtitle tracks to WebVTT.
+- **`GET /api/folders/download/{folder_id}`**: On-the-fly multi-part Zip streaming for entire folders.
+- **`GET /api/folders/properties/{folder_id}`**: Recursive file count and size calculations.
+- **`POST /api/auth/login`**: User authentication (local credentials and session tokens).
 
-4. Build the desktop app:
-   ```bash
-   npm run tauri build
-   ```
+Interactive OpenAPI documentation is available at **`/docs`** when the server is running.
 
-The built application will be available in `src/frontend/src-tauri/target/release/bundle/` with installers for Windows.
+---
 
-## Security
+## 📄 License & Attribution
 
-- Session-based authentication with secure middleware
-- CORS protection
-- Protected API endpoints
-- Secure handling of Telegram credentials
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For support, please open an issue on the GitHub repository or contact the maintainers.
+- **Original Author**: Copyright (c) 2025 P A M O D ([FileServerApp](https://github.com/pamod-madubashana/FileServerApp))
+- **Extended & Maintained**: Copyright (c) 2026 TelegramFileServer Contributors

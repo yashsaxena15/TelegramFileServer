@@ -7,6 +7,9 @@ import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
 import { MediaPlayer } from "./MediaPlayer";
 import { Thumbnail } from "./Thumbnail";
+import { DocumentReaderModal } from "./DocumentReaderModal";
+import { ArchiveInspectDialog } from "./ArchiveInspectDialog";
+import { CompressDialog } from "./CompressDialog";
 import { UploadProgressWidget, FileUploadStatus } from "./UploadProgressWidget";
 import { FloatingUploadButton } from "./FloatingUploadButton"; // Add this import
 import { TelegramVerificationDialog } from "./TelegramVerificationDialog";
@@ -101,7 +104,19 @@ export const FileGrid = ({
 }: FileGridProps) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
-  const [imageViewer, setImageViewer] = useState<{ url: string; fileName: string } | null>(null);
+  const [imageViewer, setImageViewer] = useState<{
+    imageUrl?: string;
+    fileName?: string;
+    images?: { url: string; fileName: string }[];
+    initialIndex?: number;
+  } | null>(null);
+  const [documentReader, setDocumentReader] = useState<{
+    url: string;
+    fileName: string;
+    extension?: string;
+  } | null>(null);
+  const [archiveInspect, setArchiveInspect] = useState<{ fileId: string; fileName: string } | null>(null);
+  const [compressDialog, setCompressDialog] = useState<boolean>(false);
   const [mediaPlayer, setMediaPlayer] = useState<{
     url: string;
     fileName: string;
@@ -388,13 +403,26 @@ export const FileGrid = ({
     lastOpenTimeRef.current = now;
 
     const ext = (item.extension || item.name.split('.').pop() || '').toLowerCase();
-    const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'];
+    const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'heic', 'avif', 'tiff'];
     const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'];
     const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'wma'];
+    const DOC_EXTS = [
+      'pdf', 'epub', 'cbz', 'cbr', 'docx', 'md', 'markdown',
+      'txt', 'log', 'json', 'py', 'js', 'ts', 'jsx', 'tsx', 'html', 'css',
+      'sh', 'bash', 'yml', 'yaml', 'xml', 'csv', 'sql', 'env', 'ini', 'conf'
+    ];
+    const ARCHIVE_EXTS = ['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z'];
 
     const isPhoto = item.fileType === "photo" || PHOTO_EXTS.includes(ext);
     const isVideo = item.fileType === "video" || VIDEO_EXTS.includes(ext);
     const isAudio = item.fileType === "audio" || item.fileType === "voice" || AUDIO_EXTS.includes(ext);
+    const isDoc = DOC_EXTS.includes(ext);
+    const isArchive = ARCHIVE_EXTS.includes(ext);
+
+    const baseUrl = getApiBaseUrl();
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    const sep = tokenParam ? '&' : '?';
 
     if (item.type === "folder") {
       setSelectedItems(new Set());
@@ -402,18 +430,26 @@ export const FileGrid = ({
       setIsSelectionMode(false);
       onNavigate(item.name);
     } else if (isPhoto) {
-      const baseUrl = getApiBaseUrl();
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-      const sep = tokenParam ? '&' : '?';
-      const imageUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
-      setImageViewer({ url: imageUrl, fileName: item.name });
+      const photoItems = items.filter(
+        (it) =>
+          it.type !== "folder" &&
+          (it.fileType === "photo" ||
+            PHOTO_EXTS.includes((it.extension || it.name.split('.').pop() || '').toLowerCase()))
+      );
+      const allImages = photoItems.map((it) => ({
+        url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(it.name)}${tokenParam}${sep}inline=1`,
+        fileName: it.name,
+      }));
+      const currentIdx = allImages.findIndex((img) => img.fileName === item.name);
+      setImageViewer({
+        images: allImages.length > 0 ? allImages : [{
+          url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`,
+          fileName: item.name,
+        }],
+        initialIndex: Math.max(0, currentIdx),
+      });
     } else if (isVideo || isAudio) {
       console.log("Opening media in built-in player");
-      const baseUrl = getApiBaseUrl();
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-      const sep = tokenParam ? '&' : '?';
       const mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
       
       setMediaPlayer({ 
@@ -422,8 +458,20 @@ export const FileGrid = ({
         fileType: isVideo ? "video" : (item.fileType as "audio" | "voice" || "audio"),
         fileItem: item,
       });
+    } else if (isDoc) {
+      const docUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
+      setDocumentReader({
+        url: docUrl,
+        fileName: item.name,
+        extension: ext,
+      });
+    } else if (isArchive) {
+      setArchiveInspect({
+        fileId: getItemKey(item),
+        fileName: item.name,
+      });
     } else {
-      // For document/archive or other types, trigger download
+      // For unknown binary types, trigger download
       onDownload(item);
     }
   };
@@ -514,21 +562,21 @@ export const FileGrid = ({
   };
 
   const handleBatchDownload = async () => {
-    const filesToDownload = items.filter(
-      item => selectedItems.has(getItemKey(item)) && item.type !== "folder"
+    const itemsToDownload = items.filter(
+      item => selectedItems.has(getItemKey(item))
     );
 
-    if (filesToDownload.length === 0) {
-      toast.info("No downloadable files selected (folders cannot be downloaded directly)");
+    if (itemsToDownload.length === 0) {
+      toast.info("No items selected for download");
       return;
     }
 
-    toast.info(`Queueing ${filesToDownload.length} file${filesToDownload.length > 1 ? 's' : ''} for download...`);
-    for (const file of filesToDownload) {
+    toast.info(`Queueing ${itemsToDownload.length} item${itemsToDownload.length > 1 ? 's' : ''} for download...`);
+    for (const item of itemsToDownload) {
       try {
-        await onDownload(file);
+        await onDownload(item);
       } catch (err) {
-        console.error("Error downloading file:", file.name, err);
+        console.error("Error downloading item:", item.name, err);
       }
     }
   };
@@ -601,7 +649,7 @@ export const FileGrid = ({
   };
 
   const selectedFilesCount = items.filter(
-    item => selectedItems.has(getItemKey(item)) && item.type !== "folder"
+    item => selectedItems.has(getItemKey(item))
   ).length;
 
   const handleDragStart = (e: React.DragEvent, item: FileItem) => {
@@ -1977,33 +2025,76 @@ export const FileGrid = ({
       </div>
 
       {/* Context Menu */}
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          itemType={contextMenu.itemType}
-          itemName={contextMenu.itemName}
-          onCopy={() => contextMenu.item && onCopy(contextMenu.item)}
-          onCut={() => contextMenu.item && onCut(contextMenu.item)}
-          onPaste={onPaste}
-          onDelete={() => contextMenu.item && onDelete(contextMenu.item, contextMenu.index)}
-          onRename={() => contextMenu.item && onRename(contextMenu.item, contextMenu.index)}
-          onNewFolder={onNewFolder}
-          onDownload={() => contextMenu.item && onDownload(contextMenu.item)}
-          onUploadFiles={triggerFileUpload} // Use the trigger function
-          onUploadFolder={triggerDirectoryUpload} // Use the trigger function
-          onClose={() => setContextMenu(null)}
-          hasClipboard={hasClipboard}
-          isClipboardPasted={isClipboardPasted}
-          disableDelete={
-            // Disable delete for specific virtual folders in Home
-            currentPath.length === 1 && 
-            currentPath[0] === "Home" && 
-            ["Images", "Documents", "Audio", "Voice Messages", "Videos"].includes(contextMenu.itemName)
-          }
-          onProperties={() => contextMenu.item && setPropertiesItem(contextMenu.item)}
-        />
-      )}
+      {contextMenu && (() => {
+        const cmExt = (contextMenu.item?.extension || contextMenu.item?.name?.split('.').pop() || '').toLowerCase();
+        const isArchiveItem = ['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z'].includes(cmExt);
+        const selectedCount = selectedItems.size > 0 ? selectedItems.size : 1;
+        return (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            itemType={contextMenu.itemType}
+            itemName={contextMenu.itemName}
+            onCopy={() => contextMenu.item && onCopy(contextMenu.item)}
+            onCut={() => contextMenu.item && onCut(contextMenu.item)}
+            onPaste={onPaste}
+            onDelete={() => contextMenu.item && onDelete(contextMenu.item, contextMenu.index)}
+            onRename={() => contextMenu.item && onRename(contextMenu.item, contextMenu.index)}
+            onNewFolder={onNewFolder}
+            onDownload={() => contextMenu.item && onDownload(contextMenu.item)}
+            onUploadFiles={triggerFileUpload} // Use the trigger function
+            onUploadFolder={triggerDirectoryUpload} // Use the trigger function
+            onClose={() => setContextMenu(null)}
+            hasClipboard={hasClipboard}
+            isClipboardPasted={isClipboardPasted}
+            disableDelete={
+              // Disable delete for specific virtual folders in Home
+              currentPath.length === 1 && 
+              currentPath[0] === "Home" && 
+              ["Images", "Documents", "Audio", "Voice Messages", "Videos"].includes(contextMenu.itemName)
+            }
+            onProperties={() => contextMenu.item && setPropertiesItem(contextMenu.item)}
+            isArchive={isArchiveItem}
+            selectedCount={selectedCount}
+            onInspectArchive={() => {
+              if (contextMenu.item) {
+                setArchiveInspect({
+                  fileId: getItemKey(contextMenu.item),
+                  fileName: contextMenu.item.name,
+                });
+              }
+            }}
+            onExtractArchive={async () => {
+              if (contextMenu.item) {
+                try {
+                  const baseUrl = getApiBaseUrl();
+                  toast.info(`Extracting ${contextMenu.item.name} in cloud...`);
+                  const res = await fetchWithTimeout(`${baseUrl ? baseUrl : ""}/api/archive/extract`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      file_id: getItemKey(contextMenu.item),
+                      target_path: currentApiPath || (currentPath ? `/${currentPath.join('/')}` : "/Home")
+                    })
+                  });
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || `Extraction failed (${res.status})`);
+                  }
+                  const data = await res.json();
+                  toast.success(`Extracted ${data.extracted_files} file(s) into Telegram cloud!`);
+                  if (onRefresh) onRefresh();
+                } catch (e: any) {
+                  toast.error(e.message || "Cloud extraction failed");
+                }
+              }
+            }}
+            onCompress={() => {
+              setCompressDialog(true);
+            }}
+          />
+        );
+      })()}
 
       {/* Floating Upload Button */}
       <FloatingUploadButton
@@ -2014,15 +2105,11 @@ export const FileGrid = ({
       {/* Image Viewer */}
       {imageViewer && (
         <ImageViewer
-          imageUrl={imageViewer.url}
+          imageUrl={imageViewer.imageUrl}
           fileName={imageViewer.fileName}
-          onClose={() => {
-            // Revoke the object URL to free memory
-            if (imageViewer.url.startsWith('blob:')) {
-              URL.revokeObjectURL(imageViewer.url);
-            }
-            setImageViewer(null);
-          }}
+          images={imageViewer.images}
+          initialIndex={imageViewer.initialIndex}
+          onClose={() => setImageViewer(null)}
         />
       )}
 
@@ -2043,6 +2130,56 @@ export const FileGrid = ({
               URL.revokeObjectURL(mediaPlayer.url);
             }
             setMediaPlayer(null);
+          }}
+        />
+      )}
+
+      {/* Universal Document & E-Book Reader Modal */}
+      {documentReader && (
+        <DocumentReaderModal
+          url={documentReader.url}
+          fileName={documentReader.fileName}
+          fileExtension={documentReader.extension}
+          onClose={() => setDocumentReader(null)}
+        />
+      )}
+
+      {/* Archive Inspector Dialog */}
+      {archiveInspect && (
+        <ArchiveInspectDialog
+          isOpen={Boolean(archiveInspect)}
+          onClose={() => setArchiveInspect(null)}
+          fileId={archiveInspect.fileId}
+          fileName={archiveInspect.fileName}
+          currentPath={currentApiPath || (currentPath ? `/${currentPath.join('/')}` : "/Home")}
+          onExtractSuccess={() => {
+            if (onRefresh) onRefresh();
+          }}
+        />
+      )}
+
+      {/* Cloud Archive Compress Dialog */}
+      {compressDialog && (
+        <CompressDialog
+          isOpen={compressDialog}
+          onClose={() => setCompressDialog(false)}
+          selectedItemIds={
+            selectedItems.size > 0
+              ? Array.from(selectedItems)
+              : contextMenu?.item
+                ? [getItemKey(contextMenu.item)]
+                : []
+          }
+          selectedItemNames={
+            selectedItems.size > 0
+              ? items.filter((it) => selectedItems.has(getItemKey(it))).map((it) => it.name)
+              : contextMenu?.item
+                ? [contextMenu.item.name]
+                : []
+          }
+          currentPath={currentApiPath || (currentPath ? `/${currentPath.join('/')}` : "/Home")}
+          onCompressSuccess={() => {
+            if (onRefresh) onRefresh();
           }}
         />
       )}

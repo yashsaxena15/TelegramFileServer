@@ -25,10 +25,12 @@ import {
   List,
   AlertCircle,
   ExternalLink,
+  Upload,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { downloadManager } from "@/lib/downloadManager";
 import { toast } from "sonner";
+import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 
 interface MediaPlayerProps {
   mediaUrl: string;
@@ -40,6 +42,17 @@ interface MediaPlayerProps {
 }
 
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+const ALL_QUALITIES = [
+  { id: "4k", label: "4K (2160p)", height: 2160 },
+  { id: "2k", label: "2K (1440p)", height: 1440 },
+  { id: "1080p", label: "1080p", height: 1080 },
+  { id: "720p", label: "720p", height: 720 },
+  { id: "480p", label: "480p", height: 480 },
+  { id: "360p", label: "360p", height: 360 },
+  { id: "240p", label: "240p", height: 240 },
+  { id: "144p", label: "144p", height: 144 },
+];
 
 const formatTime = (seconds: number): string => {
   if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) {
@@ -117,7 +130,29 @@ export const MediaPlayer = ({
   const [hoverPosPercent, setHoverPosPercent] = useState<number>(0);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
 
-  // Active overlays / submenus: 'none' | 'settings' | 'speed' | 'quality' | 'subtitles' | 'chapters' | 'transcript' | 'info'
+  // Stream offset, master duration, native dimensions, and pending seek refs
+  const masterDurationRef = useRef<number>(0);
+  const streamStartTimeRef = useRef<number>(0);
+  const pendingSeekRef = useRef<number | null>(null);
+  const nativeVideoDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+
+  // Dynamic stream, quality, audio & subtitle states
+  const [activeStreamUrl, setActiveStreamUrl] = useState(mediaUrl);
+  const [currentQuality, setCurrentQuality] = useState<string>("original");
+  const [currentAudioTrack, setCurrentAudioTrack] = useState<number>(0);
+  const [audioTracks, setAudioTracks] = useState<Array<{ index: number; stream_index?: number; codec?: string; language: string; title: string }>>([
+    { index: 0, title: "Default Audio (Original)", language: "Default" }
+  ]);
+  const [subtitlesList, setSubtitlesList] = useState<Array<{ id: string; label: string; src: string; isCustom?: boolean }>>([]);
+  const [currentSubtitle, setCurrentSubtitle] = useState<string>("off");
+  const customSubtitleInputRef = useRef<HTMLInputElement>(null);
+
+  const availableQualities = useMemo(() => {
+    const nativeH = nativeVideoDimensionsRef.current?.height || videoDimensions?.height || 1080;
+    return ALL_QUALITIES.filter((q) => q.height <= nativeH);
+  }, [videoDimensions]);
+
+  // Active overlays / submenus: 'none' | 'settings' | 'speed' | 'quality' | 'audio' | 'subtitles' | 'chapters' | 'transcript' | 'info'
   const [activeMenu, setActiveMenu] = useState<string>("none");
   const [transcriptSearch, setTranscriptSearch] = useState("");
 
@@ -231,19 +266,73 @@ export const MediaPlayer = ({
     }
   }, [showControls]);
 
-  const seekRelative = useCallback((deltaSeconds: number) => {
-    const el = mediaElementRef.current;
-    if (!el) return;
-    const target = Math.min(Math.max(0, el.currentTime + deltaSeconds), el.duration || 0);
-    el.currentTime = target;
-    setCurrentTime(target);
-    const type = deltaSeconds < 0 ? "rewind" : "forward";
-    setRippleFeedback({ type, id: Date.now() });
-    setTimeout(() => {
-      setRippleFeedback((prev) => (prev?.type === type ? null : prev));
-    }, 600);
-    showControls(4500);
-  }, [showControls]);
+  // Build deterministic stream URL based on quality, audio track, and start time
+  const buildStreamUrl = useCallback(
+    (q: string, aTrack: number, startTimeSec: number) => {
+      if (q === "original" && aTrack === 0) {
+        return mediaUrl;
+      }
+      const baseUrl = getApiBaseUrl() || "";
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+      const params = new URLSearchParams();
+      if (token) params.set("token", token);
+      if (q !== "original") params.set("quality", q);
+      if (aTrack !== 0) params.set("audio_track", aTrack.toString());
+      if (startTimeSec > 0) params.set("start_time", Math.floor(startTimeSec).toString());
+
+      const queryStr = params.toString();
+      return `${baseUrl}/media/stream/${encodeURIComponent(fileName)}${queryStr ? `?${queryStr}` : ""}`;
+    },
+    [fileName, mediaUrl]
+  );
+
+  // Seamless unified seek handler: works for both raw stream and transcode stream
+  const seekTo = useCallback(
+    (targetTime: number) => {
+      const el = mediaElementRef.current;
+      if (!el) return;
+      const totalDur = masterDurationRef.current || duration || 0;
+      const clamped = Math.min(Math.max(0, targetTime), totalDur > 0 ? totalDur : Math.max(0, targetTime));
+
+      setCurrentTime(clamped);
+
+      // If we are playing the original stream (with native HTTP Range request support)
+      if (currentQuality === "original" && currentAudioTrack === 0) {
+        streamStartTimeRef.current = 0;
+        el.currentTime = clamped;
+        return;
+      }
+
+      // If we are on a transcoded / remuxed stream: restart stream at offset
+      const wasPlaying = isPlaying;
+      streamStartTimeRef.current = clamped;
+      setIsBuffering(true);
+
+      const newUrl = buildStreamUrl(currentQuality, currentAudioTrack, clamped);
+      setActiveStreamUrl(newUrl);
+
+      el.load();
+      if (wasPlaying) {
+        el.play().catch(() => {});
+      }
+    },
+    [currentQuality, currentAudioTrack, duration, isPlaying, buildStreamUrl]
+  );
+
+  const seekRelative = useCallback(
+    (deltaSeconds: number) => {
+      const target = currentTime + deltaSeconds;
+      seekTo(target);
+
+      const type = deltaSeconds < 0 ? "rewind" : "forward";
+      setRippleFeedback({ type, id: Date.now() });
+      setTimeout(() => {
+        setRippleFeedback((prev) => (prev?.type === type ? null : prev));
+      }, 600);
+      showControls(4500);
+    },
+    [currentTime, seekTo, showControls]
+  );
 
   const handleVolumeChange = useCallback((newVol: number) => {
     const el = mediaElementRef.current;
@@ -333,8 +422,8 @@ export const MediaPlayer = ({
     e.preventDefault();
     e.stopPropagation();
     const timeline = timelineRef.current;
-    const el = mediaElementRef.current;
-    if (!timeline || !el || !duration) return;
+    const totalDur = masterDurationRef.current || duration;
+    if (!timeline || !totalDur) return;
 
     (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
     setIsScrubbing(true);
@@ -342,25 +431,23 @@ export const MediaPlayer = ({
 
     const rect = timeline.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const newTime = ratio * duration;
-    el.currentTime = newTime;
+    const newTime = ratio * totalDur;
     setCurrentTime(newTime);
   };
 
   const handleTimelinePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const timeline = timelineRef.current;
-    const el = mediaElementRef.current;
-    if (!timeline || !duration) return;
+    const totalDur = masterDurationRef.current || duration;
+    if (!timeline || !totalDur) return;
 
     const rect = timeline.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const newTime = ratio * duration;
+    const newTime = ratio * totalDur;
 
     setHoverPosPercent(ratio * 100);
     setHoverTime(newTime);
 
-    if (isScrubbing && el) {
-      el.currentTime = newTime;
+    if (isScrubbing) {
       setCurrentTime(newTime);
     }
   };
@@ -372,6 +459,9 @@ export const MediaPlayer = ({
       } catch {}
       setIsScrubbing(false);
       showControls(4500);
+
+      // Commit the seek cleanly
+      seekTo(currentTime);
     }
   };
 
@@ -553,30 +643,230 @@ export const MediaPlayer = ({
   const handleTimeUpdate = () => {
     const el = mediaElementRef.current;
     if (!el || isScrubbing) return;
-    setCurrentTime(el.currentTime);
+    const realTime = streamStartTimeRef.current + el.currentTime;
+    setCurrentTime(realTime);
   };
 
   const handleProgress = () => {
     const el = mediaElementRef.current;
     if (!el || !el.buffered || el.buffered.length === 0) return;
     const current = el.currentTime;
+    const offset = streamStartTimeRef.current;
     for (let i = 0; i < el.buffered.length; i++) {
       if (el.buffered.start(i) <= current && current <= el.buffered.end(i)) {
-        setBufferedEnd(el.buffered.end(i));
+        setBufferedEnd(offset + el.buffered.end(i));
         return;
       }
     }
-    setBufferedEnd(el.buffered.end(el.buffered.length - 1));
+    setBufferedEnd(offset + el.buffered.end(el.buffered.length - 1));
   };
 
   const handleLoadedMetadata = () => {
     const el = mediaElementRef.current;
     if (!el) return;
-    setDuration(el.duration || 0);
-    if (!isAudio && el instanceof HTMLVideoElement) {
-      setVideoDimensions({ width: el.videoWidth, height: el.videoHeight });
+
+    // Check if this stream has a valid finite duration
+    if (el.duration && isFinite(el.duration) && el.duration > 0) {
+      if (masterDurationRef.current === 0 || activeStreamUrl === mediaUrl) {
+        masterDurationRef.current = el.duration;
+        setDuration(el.duration);
+      }
+    } else if (masterDurationRef.current > 0) {
+      setDuration(masterDurationRef.current);
     }
+
+    // Set native video dimensions once (or when on original stream)
+    if (!isAudio && el instanceof HTMLVideoElement) {
+      if (!nativeVideoDimensionsRef.current || (activeStreamUrl === mediaUrl && currentQuality === "original")) {
+        const dims = { width: el.videoWidth, height: el.videoHeight };
+        nativeVideoDimensionsRef.current = dims;
+        setVideoDimensions(dims);
+      }
+    }
+
+    // Apply pending seek if returning to original stream or switching
+    if (pendingSeekRef.current !== null) {
+      const target = pendingSeekRef.current;
+      pendingSeekRef.current = null;
+      try {
+        el.currentTime = target;
+      } catch (err) {
+        console.warn("Failed to set currentTime on loadedmetadata:", err);
+      }
+    }
+
     setIsBuffering(false);
+  };
+
+  // Fetch media tracks info on mount
+  useEffect(() => {
+    if (isAudio) return;
+    const baseUrl = getApiBaseUrl() || "";
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+
+    fetchWithTimeout(`${baseUrl}/media/info/${encodeURIComponent(fileName)}${tokenParam}`, {
+      credentials: "include",
+    }, 8000)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (data.duration && isFinite(data.duration) && data.duration > 0) {
+          masterDurationRef.current = data.duration;
+          setDuration(data.duration);
+        }
+        if (data.height && data.width) {
+          const dims = { width: data.width, height: data.height };
+          nativeVideoDimensionsRef.current = dims;
+          setVideoDimensions(dims);
+        }
+        if (data.audio_tracks && data.audio_tracks.length > 0) {
+          setAudioTracks(data.audio_tracks);
+        }
+        if (data.subtitle_tracks && data.subtitle_tracks.length > 0) {
+          const mappedSubs = data.subtitle_tracks.map((sub: any) => ({
+            id: `embedded-${sub.index}`,
+            label: `${sub.title || sub.language} (Embedded)`,
+            src: `${baseUrl}/media/subtitles/${encodeURIComponent(fileName)}?track=${sub.index}${token ? `&token=${encodeURIComponent(token)}` : ""}`,
+          }));
+          setSubtitlesList((prev) => {
+            const customOnly = prev.filter((p) => p.isCustom);
+            return [...mappedSubs, ...customOnly];
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch media tracks info:", err);
+      });
+  }, [fileName, isAudio]);
+
+  // Sync active text tracks when currentSubtitle changes
+  useEffect(() => {
+    const el = mediaElementRef.current;
+    if (!el) return;
+    const tracks = el.textTracks;
+    for (let i = 0; i < tracks.length; i++) {
+      tracks[i].mode = currentSubtitle !== "off" ? "showing" : "disabled";
+    }
+  }, [currentSubtitle]);
+
+  // Quality change handler
+  const handleQualityChange = (q: string) => {
+    if (q === currentQuality) return;
+    const videoEl = mediaElementRef.current as HTMLVideoElement;
+    const wasPlaying = isPlaying;
+    const seekTime = currentTime; // True current playback position!
+
+    setCurrentQuality(q);
+    setActiveMenu("none");
+    setIsBuffering(true);
+
+    if (q === "original" && currentAudioTrack === 0) {
+      // Switching back to Auto (Original) with default audio
+      streamStartTimeRef.current = 0;
+      pendingSeekRef.current = seekTime;
+      setActiveStreamUrl(mediaUrl);
+      if (videoEl) {
+        videoEl.load();
+        if (wasPlaying) {
+          videoEl.play().catch(() => {});
+        }
+      }
+    } else {
+      // Transcode / downscale stream
+      streamStartTimeRef.current = seekTime;
+      const newUrl = buildStreamUrl(q, currentAudioTrack, seekTime);
+      setActiveStreamUrl(newUrl);
+      if (videoEl) {
+        videoEl.load();
+        if (wasPlaying) {
+          videoEl.play().catch(() => {});
+        }
+      }
+    }
+
+    toast.info(`Switched quality to ${q === "original" ? "Auto (Original)" : q}`);
+  };
+
+  // Audio track change handler
+  const handleAudioTrackChange = (trackIndex: number) => {
+    if (trackIndex === currentAudioTrack) return;
+    const videoEl = mediaElementRef.current as HTMLVideoElement;
+    const wasPlaying = isPlaying;
+    const seekTime = currentTime; // True current playback position!
+
+    setCurrentAudioTrack(trackIndex);
+    setActiveMenu("none");
+    setIsBuffering(true);
+
+    if (currentQuality === "original" && trackIndex === 0) {
+      // Switching back to default audio on original direct stream
+      streamStartTimeRef.current = 0;
+      pendingSeekRef.current = seekTime;
+      setActiveStreamUrl(mediaUrl);
+      if (videoEl) {
+        videoEl.load();
+        if (wasPlaying) {
+          videoEl.play().catch(() => {});
+        }
+      }
+    } else {
+      // Custom audio track stream (remuxed or transcoded)
+      streamStartTimeRef.current = seekTime;
+      const newUrl = buildStreamUrl(currentQuality, trackIndex, seekTime);
+      setActiveStreamUrl(newUrl);
+      if (videoEl) {
+        videoEl.load();
+        if (wasPlaying) {
+          videoEl.play().catch(() => {});
+        }
+      }
+    }
+
+    const trackLabel = audioTracks[trackIndex]?.title || `Track ${trackIndex + 1}`;
+    toast.info(`Switched audio to ${trackLabel}`);
+
+    if (videoEl) {
+      videoEl.load();
+      if (wasPlaying) {
+        videoEl.play().catch(() => {});
+      }
+    }
+  };
+
+  // Custom subtitle upload handler (.srt / .vtt)
+  const handleCustomSubtitleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      let vttContent = text;
+      // Convert SRT to WebVTT if it's .srt
+      if (file.name.toLowerCase().endsWith(".srt")) {
+        vttContent = "WEBVTT\n\n" + text.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+      }
+
+      const blob = new Blob([vttContent], { type: "text/vtt" });
+      const blobUrl = URL.createObjectURL(blob);
+
+      const newSub = {
+        id: `upload-${Date.now()}`,
+        label: file.name,
+        src: blobUrl,
+        isCustom: true,
+      };
+
+      setSubtitlesList((prev) => [...prev, newSub]);
+      setCurrentSubtitle(newSub.id);
+      setActiveMenu("none");
+      toast.success(`Loaded subtitle: ${file.name}`);
+    };
+
+    reader.readAsText(file);
   };
 
   const playedPercent = useMemo(() => {
@@ -774,9 +1064,10 @@ export const MediaPlayer = ({
       {/* Native Video Element */}
       <video
         ref={mediaElementRef as any}
-        src={mediaUrl}
+        src={activeStreamUrl}
         preload="auto"
         playsInline
+        crossOrigin="anonymous"
         className="w-full h-full object-contain pointer-events-none"
         onTimeUpdate={handleTimeUpdate}
         onProgress={handleProgress}
@@ -801,6 +1092,15 @@ export const MediaPlayer = ({
         onCanPlay={() => {
           setIsBuffering(false);
           setHasPlaybackError(false);
+          if (pendingSeekRef.current !== null && mediaElementRef.current) {
+            const target = pendingSeekRef.current;
+            pendingSeekRef.current = null;
+            try {
+              mediaElementRef.current.currentTime = target;
+            } catch (err) {
+              console.warn("Failed to set currentTime on canplay:", err);
+            }
+          }
         }}
         onError={() => {
           const videoEl = mediaElementRef.current as HTMLVideoElement;
@@ -831,7 +1131,20 @@ export const MediaPlayer = ({
           // Keep attempting playback or buffering without blocking modal
           setIsBuffering(false);
         }}
-      />
+      >
+        {subtitlesList
+          .filter((sub) => sub.id === currentSubtitle)
+          .map((sub) => (
+            <track
+              key={sub.id}
+              kind="subtitles"
+              src={sub.src}
+              label={sub.label}
+              srcLang="en"
+              default
+            />
+          ))}
+      </video>
 
       {/* Interactive Video Viewport: Double-tap left/right & Tap to toggle controls */}
       <div
@@ -989,7 +1302,7 @@ export const MediaPlayer = ({
           {hoverTime !== null && (
             <div
               className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded bg-zinc-900/90 text-white text-[11px] font-mono border border-white/20 shadow-lg pointer-events-none"
-              style={{ left: `${hoverPosPercent}%` }}
+              style={{ left: `${Math.min(96, Math.max(4, hoverPosPercent))}%` }}
             >
               {formatTime(hoverTime)}
             </div>
@@ -1019,7 +1332,11 @@ export const MediaPlayer = ({
             {/* Scrubber thumb handle */}
             <div
               className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 bg-white rounded-full shadow-lg transition-transform pointer-events-none ${
-                isScrubbing ? "scale-125 bg-blue-400" : "scale-0 group-hover:scale-100"
+                isScrubbing
+                  ? "scale-125 bg-blue-400"
+                  : isMobile
+                  ? "scale-100"
+                  : "scale-0 group-hover:scale-100"
               }`}
               style={{ left: `${playedPercent}%` }}
             />
@@ -1227,7 +1544,21 @@ export const MediaPlayer = ({
                     <span>Quality</span>
                   </span>
                   <div className="flex items-center space-x-1.5 text-white/60 text-xs">
-                    <span>Auto (Original)</span>
+                    <span>{currentQuality === "original" ? "Auto (Original)" : currentQuality}</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setActiveMenu("audio")}
+                  className="w-full flex items-center justify-between px-3 py-3 sm:py-2.5 rounded-xl hover:bg-white/10 text-sm transition-colors touch-manipulation"
+                >
+                  <span className="flex items-center space-x-2.5">
+                    <FileAudio className="w-4 h-4 text-white/70" />
+                    <span>Audio Track</span>
+                  </span>
+                  <div className="flex items-center space-x-1.5 text-white/60 text-xs">
+                    <span>{audioTracks[currentAudioTrack]?.title || "Default Audio"}</span>
                     <ChevronRight className="w-4 h-4" />
                   </div>
                 </button>
@@ -1241,7 +1572,7 @@ export const MediaPlayer = ({
                     <span>Subtitles / CC</span>
                   </span>
                   <div className="flex items-center space-x-1.5 text-white/60 text-xs">
-                    <span>Off</span>
+                    <span>{currentSubtitle === "off" ? "Off" : (subtitlesList.find(s => s.id === currentSubtitle)?.label || "Active")}</span>
                     <ChevronRight className="w-4 h-4" />
                   </div>
                 </button>
@@ -1312,7 +1643,7 @@ export const MediaPlayer = ({
 
             {/* Quality Submenu */}
             {activeMenu === "quality" && (
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <div className="flex items-center space-x-2 px-2 py-2 border-b border-white/10 text-sm font-medium">
                   <button
                     onClick={() => setActiveMenu("settings")}
@@ -1322,14 +1653,75 @@ export const MediaPlayer = ({
                   </button>
                   <span>Video Quality</span>
                 </div>
-                <div className="px-3 py-2">
-                  <div className="flex items-center justify-between py-2 text-sm text-blue-400 font-medium bg-blue-600/20 px-3 rounded-lg border border-blue-500/30">
-                    <span>Auto (Original Source)</span>
-                    <Check className="w-4 h-4" />
-                  </div>
-                  <p className="text-[11px] text-white/50 leading-relaxed mt-2.5">
-                    Streaming original file directly from Telegram storage without lossy compression. Multi-resolution ladder (1080p, 720p, 480p) requires server-side transcode pipeline.
-                  </p>
+                <div className="py-1 max-h-64 overflow-y-auto space-y-0.5">
+                  {/* Auto (Original Source) */}
+                  <button
+                    onClick={() => handleQualityChange("original")}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors touch-manipulation ${
+                      currentQuality === "original"
+                        ? "bg-blue-600/25 text-blue-400 font-medium"
+                        : "hover:bg-white/10 text-white/80"
+                    }`}
+                  >
+                    <div className="flex flex-col text-left">
+                      <span>Auto (Original Source)</span>
+                      <span className="text-[10px] text-white/40">Direct stream • 0% CPU</span>
+                    </div>
+                    {currentQuality === "original" && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+
+                  {/* Filtered ladder where height <= native video height */}
+                  {availableQualities.map((q) => (
+                    <button
+                      key={q.id}
+                      onClick={() => handleQualityChange(q.id)}
+                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors touch-manipulation ${
+                        currentQuality === q.id
+                          ? "bg-blue-600/25 text-blue-400 font-medium"
+                          : "hover:bg-white/10 text-white/80"
+                      }`}
+                    >
+                      <div className="flex flex-col text-left">
+                        <span>{q.label}</span>
+                        <span className="text-[10px] text-white/40">Downscaled • Low data</span>
+                      </div>
+                      {currentQuality === q.id && <Check className="w-4 h-4 text-blue-400" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Audio Tracks Submenu */}
+            {activeMenu === "audio" && (
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2 px-2 py-2 border-b border-white/10 text-sm font-medium">
+                  <button
+                    onClick={() => setActiveMenu("settings")}
+                    className="p-1.5 rounded-full hover:bg-white/10 text-white/70 hover:text-white"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <span>Audio Tracks</span>
+                </div>
+                <div className="py-1 max-h-64 overflow-y-auto space-y-0.5">
+                  {audioTracks.map((track) => (
+                    <button
+                      key={track.index}
+                      onClick={() => handleAudioTrackChange(track.index)}
+                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors touch-manipulation ${
+                        currentAudioTrack === track.index
+                          ? "bg-blue-600/25 text-blue-400 font-medium"
+                          : "hover:bg-white/10 text-white/80"
+                      }`}
+                    >
+                      <div className="flex flex-col text-left">
+                        <span>{track.title || `Track ${track.index + 1}`}</span>
+                        <span className="text-[10px] text-white/40">{track.language} {track.codec ? `• ${track.codec.toUpperCase()}` : ''}</span>
+                      </div>
+                      {currentAudioTrack === track.index && <Check className="w-4 h-4 text-blue-400" />}
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
@@ -1346,14 +1738,60 @@ export const MediaPlayer = ({
                   </button>
                   <span>Subtitles / CC</span>
                 </div>
-                <div className="px-3 py-2">
-                  <div className="flex items-center justify-between py-2 text-sm text-blue-400 font-medium bg-blue-600/20 px-3 rounded-lg border border-blue-500/30">
+                <div className="py-1 max-h-64 overflow-y-auto space-y-0.5 px-1">
+                  {/* Off Option */}
+                  <button
+                    onClick={() => {
+                      setCurrentSubtitle("off");
+                      setActiveMenu("none");
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors touch-manipulation ${
+                      currentSubtitle === "off"
+                        ? "bg-blue-600/25 text-blue-400 font-medium"
+                        : "hover:bg-white/10 text-white/80"
+                    }`}
+                  >
                     <span>Off</span>
-                    <Check className="w-4 h-4" />
+                    {currentSubtitle === "off" && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+
+                  {/* Available Subtitle Tracks */}
+                  {subtitlesList.map((sub) => (
+                    <button
+                      key={sub.id}
+                      onClick={() => {
+                        setCurrentSubtitle(sub.id);
+                        setActiveMenu("none");
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors touch-manipulation ${
+                        currentSubtitle === sub.id
+                          ? "bg-blue-600/25 text-blue-400 font-medium"
+                          : "hover:bg-white/10 text-white/80"
+                      }`}
+                    >
+                      <span className="truncate pr-2">{sub.label}</span>
+                      {currentSubtitle === sub.id && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                    </button>
+                  ))}
+
+                  {/* Custom Subtitle Upload Button */}
+                  <div className="pt-2 border-t border-white/10 mt-2">
+                    <input
+                      ref={customSubtitleInputRef}
+                      type="file"
+                      accept=".srt,.vtt"
+                      className="hidden"
+                      onChange={handleCustomSubtitleUpload}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => customSubtitleInputRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-medium text-white transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload Subtitle (.srt / .vtt)</span>
+                    </button>
                   </div>
-                  <p className="text-[11px] text-white/50 leading-relaxed mt-2.5">
-                    No embedded or external subtitle tracks (.vtt / .srt) were detected for this media file.
-                  </p>
                 </div>
               </div>
             )}

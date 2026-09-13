@@ -88,7 +88,7 @@ class WebServerManager:
             # Configure Uvicorn server with custom logging (programmatic launch)
             config = uvicorn.Config(
                 self._web_app,
-                host="0.0.0.0",
+                host=os.getenv("HOST", "0.0.0.0"),
                 port=self._web_port,
                 log_level="info",
                 log_config=None,  # This tells Uvicorn to use the existing Python logging configuration

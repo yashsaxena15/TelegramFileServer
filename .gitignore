@@ -18,3 +18,5 @@ node_modules/
 dist/
 **/dist/
 *.tsbuildinfo
+temp_archives/
+**/temp_archives/

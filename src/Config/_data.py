@@ -8,8 +8,8 @@ load_dotenv()
 APP_NAME = os.getenv("APP_NAME", "MyApp")
 TIME_ZONE = os.getenv("TIME_ZONE", "+5:30")
 WEB_APP = os.getenv("WEB_APP", None)
-API_ID = int(os.getenv("API_ID"))
-API_HASH = str(os.getenv("API_HASH"))
+API_ID = int(os.getenv("API_ID", "0")) if os.getenv("API_ID") else None
+API_HASH = str(os.getenv("API_HASH", ""))
 LOGGER_BOT = os.getenv("LOGGER_BOT")
 OWNER = int(os.getenv("OWNER")) if os.getenv("OWNER") else None
 GROUP = int(os.getenv("GROUP")) if os.getenv("GROUP") else None
@@ -25,15 +25,20 @@ DATABASE_URL = str(os.getenv("DATABASE_URL", None))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
-# Web Server Port Configuration
+# Web Server Configuration
 PORT = int(os.getenv("PORT", "8000"))
+HOST = os.getenv("HOST", "0.0.0.0")
+SESSION_SECRET_KEY = os.getenv(
+    "SESSION_SECRET_KEY",
+    "f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0"
+)
 
-AUTHORIZED_ADMIN_EMAILS = [
-    "premiumqtrst@gmail.com",
-    "pamodmadubashna2003@gmail.com",
-    "randi33pquest@gmail.com"
-]
+# Admin Credentials & Authorized Emails (Configurable via .env)
+DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "password")
 
+_raw_admin_emails = os.getenv("AUTHORIZED_ADMIN_EMAILS", "")
+AUTHORIZED_ADMIN_EMAILS = [e.strip() for e in _raw_admin_emails.split(",") if e.strip()]
 
 TOKENS = []
 for i in range(20):
