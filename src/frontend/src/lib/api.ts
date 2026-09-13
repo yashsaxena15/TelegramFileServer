@@ -616,11 +616,156 @@ export const api = {
         return response.json();
     },
 
+    async uploadFileChunked(
+        file: File,
+        path: string = '/',
+        onProgress?: (percent: number, loaded: number, total: number, speed?: string, eta?: string) => void
+    ): Promise<UploadFileResponse> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const authHeaders = authService.getAuthHeaders();
+
+        // Step 1: Init chunked upload
+        const initRes = await fetch(`${apiUrl}/files/upload/init`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+                filename: file.name,
+                filesize: file.size,
+                path: path || '/Home'
+            })
+        });
+
+        if (!initRes.ok) {
+            const errData = await initRes.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Failed to initialize chunked upload');
+        }
+
+        const initData = await initRes.json();
+        const uploadId = initData.upload_id;
+        const CHUNK_SIZE = initData.chunk_size || 20 * 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+        let bytesUploaded = 0;
+        let lastTime = Date.now();
+        let lastLoaded = 0;
+        let currentSpeed = 0;
+
+        const formatSpeed = (bytesPerSec: number): string => {
+            if (bytesPerSec <= 0) return '0 B/s';
+            const k = 1024;
+            const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+            const i = Math.floor(Math.log(bytesPerSec) / Math.log(k));
+            return parseFloat((bytesPerSec / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        };
+
+        const formatEta = (seconds: number): string => {
+            if (!isFinite(seconds) || seconds <= 0) return '';
+            if (seconds > 3600) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+            if (seconds > 60) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+            return `${Math.round(seconds)}s`;
+        };
+
+        // Step 2: Upload chunks sequentially with auto-retry
+        for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+            const start = chunkIdx * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunkBlob = file.slice(start, end);
+
+            let success = false;
+            let lastErr: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const chunkFormData = new FormData();
+                    chunkFormData.append('upload_id', uploadId);
+                    chunkFormData.append('chunk_index', chunkIdx.toString());
+                    chunkFormData.append('chunk_file', chunkBlob, file.name);
+
+                    const chunkRes = await fetch(`${apiUrl}/files/upload/chunk`, {
+                        method: 'POST',
+                        headers: {
+                            ...authHeaders
+                        },
+                        credentials: 'include',
+                        body: chunkFormData
+                    });
+
+                    if (!chunkRes.ok) {
+                        const errData = await chunkRes.json().catch(() => ({}));
+                        throw new Error(errData.detail || `Chunk upload failed (${chunkRes.status})`);
+                    }
+
+                    success = true;
+                    bytesUploaded += (end - start);
+
+                    const now = Date.now();
+                    const timeDiff = (now - lastTime) / 1000;
+                    if (timeDiff >= 0.3) {
+                        const bytesDiff = bytesUploaded - lastLoaded;
+                        const instantSpeed = bytesDiff / timeDiff;
+                        currentSpeed = currentSpeed === 0 ? instantSpeed : 0.7 * currentSpeed + 0.3 * instantSpeed;
+                        lastTime = now;
+                        lastLoaded = bytesUploaded;
+                    }
+
+                    if (onProgress) {
+                        const percent = Math.min(99, Math.round((bytesUploaded / file.size) * 100));
+                        const remaining = file.size - bytesUploaded;
+                        const etaSec = currentSpeed > 0 ? remaining / currentSpeed : 0;
+                        onProgress(percent, bytesUploaded, file.size, formatSpeed(currentSpeed), formatEta(etaSec));
+                    }
+                    break;
+                } catch (err) {
+                    lastErr = err;
+                    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                }
+            }
+
+            if (!success) {
+                throw new Error(`Failed to upload chunk ${chunkIdx + 1}/${totalChunks}: ${lastErr?.message || 'Network error'}`);
+            }
+        }
+
+        // Step 3: Complete upload
+        const completeFormData = new FormData();
+        completeFormData.append('upload_id', uploadId);
+
+        const completeRes = await fetch(`${apiUrl}/files/upload/complete`, {
+            method: 'POST',
+            headers: {
+                ...authHeaders
+            },
+            credentials: 'include',
+            body: completeFormData
+        });
+
+        if (!completeRes.ok) {
+            const errData = await completeRes.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Failed to complete file upload');
+        }
+
+        if (onProgress) {
+            onProgress(100, file.size, file.size, '', '');
+        }
+
+        return await completeRes.json();
+    },
+
     async uploadFile(
         file: File, 
         path: string = '/',
         onProgress?: (percent: number, loaded: number, total: number, speed?: string, eta?: string) => void
     ): Promise<UploadFileResponse> {
+        // Automatically use chunked uploader for large files (> 100MB) for maximum resilience
+        if (file.size > 100 * 1024 * 1024) {
+            return this.uploadFileChunked(file, path, onProgress);
+        }
+
         const baseUrl = getApiBaseUrl();
         const apiUrl = baseUrl ? `${baseUrl}` : '';
         

@@ -179,6 +179,11 @@ async def stream_handler(request: Request, file_name: str):
     file = message.video or message.document or message.photo or message.audio or message.voice
     file_hash = file.file_unique_id[:6]
 
+    is_split = file_data.get("is_split", False)
+    parts = file_data.get("parts", [])
+    total_file_size = file_data.get("file_size")
+    file_name_db = file_data.get("file_name")
+
     return await media_streamer(
         request,
         client=client,
@@ -187,8 +192,8 @@ async def stream_handler(request: Request, file_name: str):
         file=file,
         secure_hash=file_hash,
         total_file_size=total_file_size,
-        parts_list=parts_list,
-        file_name=stored_file_name
+        parts_list=parts_list or parts,
+        file_name=stored_file_name or file_name_db
     )
 
 # parse_range_header function has been moved to streaming_utils module
@@ -465,6 +470,9 @@ async def media_streamer(
     total_file_size: int = None,
     parts_list: list = None,
     file_name: str = None,
+    is_split: bool = False,
+    file_size: int = None,
+    parts: list = None,
 ) -> StreamingResponse:
     range_header = request.headers.get("Range", "")
     
@@ -477,12 +485,15 @@ async def media_streamer(
         class_cache[client] = tg_connect
 
     # Determine true total file size
-    if total_file_size and total_file_size > 0:
-        file_size = total_file_size
+    effective_file_size = total_file_size or file_size
+    if effective_file_size and effective_file_size > 0:
+        file_size = effective_file_size
     elif hasattr(file, 'file_size') and file.file_size:
         file_size = file.file_size
     else:
         file_size = 0
+
+    parts_list = parts_list or parts
 
     from_bytes, until_bytes = parse_range_header(range_header, file_size)
 
