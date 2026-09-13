@@ -60,7 +60,7 @@ export const ImageViewer = ({ imageUrl, fileName, onClose }: ImageViewerProps) =
         <X size={32} />
       </button>
       
-      <div className="text-white absolute top-4 left-4 text-lg font-semibold z-10">
+      <div className="text-white absolute top-4 left-4 right-14 text-base sm:text-lg font-semibold z-10 truncate">
         {fileName}
       </div>
       

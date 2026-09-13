@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Home, FolderOpen, User, Settings, LogOut, Info, Download } from "lucide-react";
+import { Home, FolderOpen, User, Settings, LogOut, Info, Download, Image, FileText, Video, Music, Mic, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { motion, AnimatePresence } from "framer-motion";
@@ -106,6 +106,36 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
   const ownerNavItems = [
     { name: "Users", path: "/users", icon: User },
   ];
+
+  const categoryFilters = [
+    { name: "Home", icon: FolderOpen, filter: "all" },
+    { name: "Images", icon: Image, filter: "photo" },
+    { name: "Documents", icon: FileText, filter: "document" },
+    { name: "Videos", icon: Video, filter: "video" },
+    { name: "Audio", icon: Music, filter: "audio" },
+    { name: "Voice Messages", icon: Mic, filter: "voice" },
+  ];
+
+  const [currentCategory, setCurrentCategory] = useState<string>("all");
+
+  useEffect(() => {
+    const handleCategoryUpdated = (e: CustomEvent) => {
+      if (e.detail?.filter) {
+        setCurrentCategory(e.detail.filter);
+      }
+    };
+    window.addEventListener('currentCategoryChanged', handleCategoryUpdated as EventListener);
+    return () => window.removeEventListener('currentCategoryChanged', handleCategoryUpdated as EventListener);
+  }, []);
+
+  const handleCategoryClick = (filter: string) => {
+    setCurrentCategory(filter);
+    if (location.pathname !== "/") {
+      navigate("/");
+    }
+    window.dispatchEvent(new CustomEvent('changeCategory', { detail: { filter } }));
+    setIsOpen(false);
+  };
 
   const navItems = isOwner ? [...baseNavItems, ...ownerNavItems] : baseNavItems;
 
@@ -298,22 +328,69 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
                   <p className="text-sm text-muted-foreground">Online</p>
                 </div>
               </div>
+              {isMobile && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsOpen(false)}
+                  className="h-8 w-8 rounded-lg"
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
             </div>
 
             {/* Menu Items */}
             <nav 
-              className="py-2"
+              className="py-2 overflow-y-auto max-h-[calc(100vh-5rem)]"
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
             >
+              {/* Category Navigation on Mobile */}
+              {isMobile && (
+                <div className="mb-2">
+                  <div className="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Categories
+                  </div>
+                  {categoryFilters.map((cat) => {
+                    const Icon = cat.icon;
+                    const isSelected = currentCategory === cat.filter && location.pathname === "/";
+                    return (
+                      <button
+                        key={cat.filter}
+                        onClick={() => handleCategoryClick(cat.filter)}
+                        className={cn(
+                          "flex w-full items-center gap-3 px-4 py-2.5 min-h-[44px] text-left text-sm transition-all duration-200 rounded-lg",
+                          isSelected 
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" 
+                            : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                        )}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                      >
+                        <Icon className="h-4 w-4" />
+                        <span>{cat.name}</span>
+                      </button>
+                    );
+                  })}
+                  <div className="my-2 border-t border-sidebar-border" />
+                  <div className="px-4 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Account
+                  </div>
+                </div>
+              )}
+
               {navItems.map((item, index) => (
                 item.name !== "Logout" && (
                   <button
                     key={item.name}
                     onClick={() => handleMenuClick(item.name, item.path)}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-sidebar-foreground transition-all duration-200 hover:bg-sidebar-accent hover:scale-[1.02] rounded-lg"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 min-h-[44px] text-left text-sidebar-foreground transition-all duration-200 hover:bg-sidebar-accent hover:scale-[1.01] rounded-lg"
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -325,10 +402,10 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
                 )
               ))}
               {/* Logout button - positioned near the bottom but not at the very end */}
-              <div className="pt-4 mt-4 border-t border-sidebar-border">
+              <div className="pt-3 mt-3 border-t border-sidebar-border">
                 <button
                   onClick={() => handleMenuClick("Logout")}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-sidebar-foreground transition-all duration-200 hover:bg-sidebar-accent hover:scale-[1.02] rounded-lg"
+                  className="flex w-full items-center gap-3 px-4 py-2.5 min-h-[44px] text-left text-sidebar-foreground transition-all duration-200 hover:bg-destructive/10 hover:text-destructive rounded-lg"
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();

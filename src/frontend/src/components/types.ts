@@ -10,6 +10,9 @@ export interface FileItem {
   thumbnail?: string | null;
   file_path?: string;  // Path where file is located (folder name)
   modified?: string;  // ISO format date string for when file was last modified
+  chat_id?: number;
+  message_id?: number;
+  caption?: string;
 }
 
 export interface ApiFile {
@@ -25,47 +28,51 @@ export interface ApiFile {
   file_path: string;  // Path where file is located
 }
 
+const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'];
+const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'];
+const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'wma'];
+
 // Utility function to get icon based on file type
 export const getFileIcon = (fileType: string, fileName?: string): string => {
-  const extension = fileName?.split('.').pop()?.toLowerCase();
+  const extension = fileName?.split('.').pop()?.toLowerCase() || '';
 
-  switch (fileType) {
-    case 'folder':
-      return '📁';
-    case 'photo':
-      return '🖼️';
-    case 'video':
-      return '🎬';
-    case 'audio':
-    case 'voice':
-      return '🎵';
-    case 'document':
-      if (extension === 'pdf') return '📄';
-      if (['doc', 'docx'].includes(extension || '')) return '📝';
-      if (['xls', 'xlsx'].includes(extension || '')) return '📊';
-      if (['zip', 'rar', '7z'].includes(extension || '')) return '📦';
-      return '📄';
-    default:
-      return '📄';
-  }
+  if (fileType === 'folder') return '📁';
+  if (fileType === 'photo' || PHOTO_EXTS.includes(extension)) return '🖼️';
+  if (fileType === 'video' || VIDEO_EXTS.includes(extension)) return '🎬';
+  if (fileType === 'audio' || fileType === 'voice' || AUDIO_EXTS.includes(extension)) return '🎵';
+  if (extension === 'pdf') return '📄';
+  if (['doc', 'docx'].includes(extension)) return '📝';
+  if (['xls', 'xlsx'].includes(extension)) return '📊';
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(extension)) return '📦';
+  return '📄';
 };
 
 // Convert API file to FileItem
 export const apiFileToFileItem = (apiFile: any): FileItem => {
   const fileName = apiFile.file_name || `${apiFile.file_type}_${apiFile.message_id}`;
-  const extension = fileName.split('.').pop();
+  const extension = fileName.split('.').pop()?.toLowerCase();
+
+  let resolvedFileType = apiFile.file_type;
+  if (resolvedFileType === 'document' || !resolvedFileType) {
+    if (VIDEO_EXTS.includes(extension || '')) resolvedFileType = 'video';
+    else if (PHOTO_EXTS.includes(extension || '')) resolvedFileType = 'photo';
+    else if (AUDIO_EXTS.includes(extension || '')) resolvedFileType = 'audio';
+  }
 
   return {
     id: apiFile.id,
     file_unique_id: apiFile.file_unique_id,
     name: fileName,
     type: apiFile.file_type === 'folder' ? 'folder' : 'file',
-    icon: getFileIcon(apiFile.file_type, fileName),
+    icon: getFileIcon(resolvedFileType, fileName),
     extension: extension !== fileName ? extension : undefined,
     size: apiFile.file_size,
-    fileType: apiFile.file_type,
+    fileType: resolvedFileType,
     thumbnail: apiFile.thumbnail,
     file_path: apiFile.file_path,
     modified: apiFile.modified_date,
+    chat_id: apiFile.chat_id,
+    message_id: apiFile.message_id,
+    caption: apiFile.file_caption,
   };
 };

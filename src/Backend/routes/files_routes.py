@@ -343,7 +343,7 @@ async def upload_file(
         # Override with extension-based type if needed
         elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
             file_type = "photo"
-        elif file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm']:
+        elif file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.3gp', '.ogv']:
             file_type = "video"
         elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
             file_type = "audio"

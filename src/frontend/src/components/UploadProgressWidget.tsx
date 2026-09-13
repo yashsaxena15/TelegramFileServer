@@ -105,7 +105,7 @@ export const UploadProgressWidget = ({
   }, [items, hasCompleted, onComplete]);
 
   return (
-    <div className={`fixed bottom-4 right-4 z-50 w-96 max-w-[92vw] bg-background border border-border rounded-lg shadow-xl transition-all duration-300 ease-in-out ${
+    <div className={`fixed bottom-3 left-3 right-3 sm:left-auto sm:right-4 sm:bottom-4 z-50 sm:w-96 bg-background border border-border rounded-xl shadow-xl transition-all duration-300 ease-in-out ${
       isVisible ? 'transform translate-y-0 opacity-100' : 'transform translate-y-full opacity-0'
     }`}>
       <div className="p-4">

@@ -1,4 +1,5 @@
-import { ChevronLeft, ChevronRight, ChevronDown, Search, Grid3x3, List, MoreHorizontal, RefreshCw, Download } from "lucide-react";
+import { useState } from "react";
+import { ChevronLeft, ChevronRight, ChevronDown, Search, Grid3x3, List, MoreHorizontal, RefreshCw, Download, Menu, X } from "lucide-react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 
@@ -29,6 +30,8 @@ export const TopBar = ({
   onToggleDownloadQueue, // Add this prop
   onToggleSidebar, // Add sidebar toggle prop
 }: TopBarProps) => {
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
+
   return (
     <div 
       className="backdrop-blur-md bg-background/70 border-b border-border select-none sticky top-0 z-10"
@@ -37,89 +40,147 @@ export const TopBar = ({
         e.stopPropagation();
       }}
     >
-      <div className="flex items-center gap-2 px-4 py-2">
-        <div className="flex items-center gap-1">
-          
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onBack}
-            className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            onClick={() => window.history.forward()}
-            className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onRefresh}
-            className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-          >
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div 
-          className="flex items-center gap-1 flex-1 bg-muted/50 backdrop-blur-sm rounded-lg px-3 py-1.5 text-sm transition-all duration-200 hover:bg-muted/70"
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-        >
-          {currentPath.map((folder, index) => (
-            <div key={index} className="flex items-center gap-1">
+      {isMobileSearchOpen ? (
+        <div className="flex items-center gap-2 px-3 sm:px-4 py-2 w-full">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              autoFocus
+              placeholder={`Search ${currentPath[currentPath.length - 1]}`}
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="pl-10 pr-9 h-9 bg-muted/50 border-0 rounded-lg text-sm"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            />
+            {searchQuery && (
               <button
-                onClick={() => onBreadcrumbClick(index)}
-                className="hover:text-primary transition-colors px-1 py-0.5 rounded transition-all duration-200 hover:bg-accent/50"
+                onClick={() => onSearchChange("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
-                {folder}
+                <X className="h-4 w-4" />
               </button>
-              {index < currentPath.length - 1 && (
-                <ChevronRight className="h-3 w-3 text-muted-foreground" />
-              )}
-            </div>
-          ))}
+            )}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsMobileSearchOpen(false)}
+            className="text-xs px-2.5 h-9 shrink-0"
+          >
+            Cancel
+          </Button>
         </div>
+      ) : (
+        <div className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2">
+          <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
+            {onToggleSidebar && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onToggleSidebar}
+                className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
+                title="Open Menu"
+              >
+                <Menu className="h-4 w-4" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onBack}
+              className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
+              title="Back"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => window.history.forward()}
+              className="hidden sm:inline-flex h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
+              title="Forward"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onRefresh}
+              className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
+              title="Refresh"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </div>
 
-        <div 
-          className="relative w-64 transition-all duration-200 hover:scale-[1.02]"
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-        >
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={`Search ${currentPath[currentPath.length - 1]}`}
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="pl-10 h-9 bg-muted/50 border-0 backdrop-blur-sm rounded-lg transition-all duration-200 focus:ring-2 focus:ring-primary/50"
+          <div 
+            className="flex items-center gap-1 flex-1 min-w-0 bg-muted/50 backdrop-blur-sm rounded-lg px-2.5 sm:px-3 py-1.5 text-sm overflow-x-auto no-scrollbar whitespace-nowrap transition-all duration-200 hover:bg-muted/70"
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
             }}
-          />
-        </div>
-      </div>
+          >
+            {currentPath.map((folder, index) => (
+              <div key={index} className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => onBreadcrumbClick(index)}
+                  className="hover:text-primary transition-colors px-1 py-0.5 rounded transition-all duration-200 hover:bg-accent/50 max-w-[120px] sm:max-w-none truncate"
+                >
+                  {folder}
+                </button>
+                {index < currentPath.length - 1 && (
+                  <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                )}
+              </div>
+            ))}
+          </div>
 
-      <div className="flex items-center justify-between px-4 py-2 border-t border-border/50">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-8 text-xs rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsMobileSearchOpen(true)}
+            className="md:hidden h-8 w-8 shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
+            title="Search"
+          >
+            <Search className="h-4 w-4 text-muted-foreground" />
+          </Button>
+
+          <div 
+            className="hidden md:block relative w-64 shrink-0 transition-all duration-200 hover:scale-[1.02]"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+          >
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={`Search ${currentPath[currentPath.length - 1]}`}
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="pl-10 h-9 bg-muted/50 border-0 backdrop-blur-sm rounded-lg transition-all duration-200 focus:ring-2 focus:ring-primary/50"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 border-t border-border/50 overflow-x-auto no-scrollbar gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
             <span>New</span>
             <ChevronDown className="ml-1 h-3 w-3" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-8 text-xs rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
+          <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
             <span>Sort</span>
             <ChevronDown className="ml-1 h-3 w-3" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-8 text-xs rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
+          <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
             <span>View</span>
             <ChevronDown className="ml-1 h-3 w-3" />
           </Button>
@@ -127,18 +188,18 @@ export const TopBar = ({
             <Button 
               variant="ghost" 
               size="sm" 
-              className="h-8 text-xs rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
+              className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
               onClick={onPaste}
             >
               Paste
             </Button>
           )}
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
+          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           {/* Download button - always render but disable if no handler */}
           <Button
             variant="ghost"
