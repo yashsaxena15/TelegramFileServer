@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { FileItem } from "@/components/types";
 import { TraversedFile } from "@/lib/folderTraversal"; // Add this import
-import { Folder, FileText, Image as ImageIcon, FileArchive } from "lucide-react";
+import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check, X, Trash2, Download, Info } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
@@ -11,9 +11,22 @@ import { UploadProgressWidget, FileUploadStatus } from "./UploadProgressWidget";
 import { FloatingUploadButton } from "./FloatingUploadButton"; // Add this import
 import { TelegramVerificationDialog } from "./TelegramVerificationDialog";
 import { IndexChatDialog } from "./IndexChatDialog"; // Add this import
-import { getApiBaseUrl } from "@/lib/api";
+import { PropertiesDialog } from "./PropertiesDialog";
+import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { getPlayerPreference } from "@/lib/playerSettings";
 import { useBatchThumbnailLoader } from "@/hooks/useBatchThumbnailLoader"; // Add this import
+import { useIsMobile } from "@/hooks/use-mobile";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import authService from "@/lib/authService";
 import type { Event } from '@tauri-apps/api/event';
 interface FileGridProps {
@@ -91,6 +104,7 @@ export const FileGrid = ({
     url: string;
     fileName: string;
     fileType: "video" | "audio" | "voice";
+    fileItem?: FileItem;
   } | null>(null);
   const [isDragActive, setIsDragActive] = useState(false); // Add drag active state
   const [dropTarget, setDropTarget] = useState<FileItem | null>(null); // Track drop target
@@ -99,6 +113,66 @@ export const FileGrid = ({
   const [isDirectoryUpload, setIsDirectoryUpload] = useState(false); // Track if this is a directory upload
   const [showTelegramVerificationDialog, setShowTelegramVerificationDialog] = useState(false); // Track Telegram verification dialog visibility
   const [showIndexChatDialog, setShowIndexChatDialog] = useState(false); // Track index chat dialog visibility
+  const isMobile = useIsMobile();
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false);
+  const [propertiesItem, setPropertiesItem] = useState<FileItem | null>(null);
+  const lastTapRef = useRef<{ name: string; time: number } | null>(null);
+  const lastOpenTimeRef = useRef<number>(0);
+
+  // If selectedItems becomes empty, automatically turn off selection mode
+  useEffect(() => {
+    if (selectedItems.size === 0) {
+      setIsSelectionMode(false);
+    }
+  }, [selectedItems.size]);
+
+  // Clear selection when navigating folders
+  useEffect(() => {
+    setSelectedItems(new Set());
+    setLastSelectedIndex(null);
+    lastTapRef.current = null;
+    setIsSelectionMode(false);
+  }, [currentFolder, currentApiPath]);
+
+  // Keyboard shortcuts: Escape to clear selection, Ctrl+A / Cmd+A to select all, Alt+Enter for Properties
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === "Escape") {
+        if (selectedItems.size > 0) {
+          setSelectedItems(new Set());
+          setLastSelectedIndex(null);
+          setIsSelectionMode(false);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        const allNames = items.map(i => i.name);
+        setSelectedItems(new Set(allNames));
+        setIsSelectionMode(true);
+      } else if (e.altKey && e.key === "Enter") {
+        e.preventDefault();
+        if (selectedItems.size === 1) {
+          const selectedName = Array.from(selectedItems)[0];
+          const found = items.find(i => i.name === selectedName);
+          if (found) {
+            setPropertiesItem(found);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [items, selectedItems]);
+
   const dragCounter = useRef(0); // Track drag enter/leave events
   const draggedItemRef = useRef<FileItem | null>(null); // Ref for dragged item to access in Tauri events    // Update the ref whenever draggedItem changes
   useEffect(() => {
@@ -228,6 +302,53 @@ export const FileGrid = ({
     disableFileDrop();
   }, [isTauri]);
 
+  const openItemContextMenu = (item: FileItem, index: number, clientX?: number, clientY?: number) => {
+    if (!selectedItems.has(item.name)) {
+      setSelectedItems(new Set([item.name]));
+      setLastSelectedIndex(index);
+    }
+    setContextMenu({
+      x: clientX ?? (typeof window !== 'undefined' ? window.innerWidth / 2 : 200),
+      y: clientY ?? (typeof window !== 'undefined' ? window.innerHeight / 2 : 300),
+      itemType: item.type,
+      itemName: item.name,
+      item,
+      index,
+    });
+  };
+
+  const touchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isLongPressRef = useRef<boolean>(false);
+
+  const handleTouchStart = (e: React.TouchEvent, item: FileItem, index: number) => {
+    const touch = e.touches[0];
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+    isLongPressRef.current = false;
+    if (touchTimerRef.current) clearTimeout(touchTimerRef.current);
+    touchTimerRef.current = setTimeout(() => {
+      isLongPressRef.current = true;
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try { navigator.vibrate(40); } catch (_) {}
+      }
+      openItemContextMenu(item, index, touch.clientX, touch.clientY);
+    }, 500);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchStartPosRef.current) return;
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
+    if (dx > 10 || dy > 10) {
+      if (touchTimerRef.current) clearTimeout(touchTimerRef.current);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (touchTimerRef.current) clearTimeout(touchTimerRef.current);
+  };
+
   const handleContextMenu = (e: React.MouseEvent, item: FileItem, index: number) => {
     e.preventDefault();
     e.stopPropagation(); // Prevent event from bubbling to parent container
@@ -243,36 +364,224 @@ export const FileGrid = ({
     });
   };
 
-  const handleItemClick = async (item: FileItem) => {
+  const handleItemOpen = (item: FileItem) => {
+    const now = Date.now();
+    if (now - lastOpenTimeRef.current < 250) return;
+    lastOpenTimeRef.current = now;
+
+    const ext = (item.extension || item.name.split('.').pop() || '').toLowerCase();
+    const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'];
+    const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'];
+    const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'wma'];
+
+    const isPhoto = item.fileType === "photo" || PHOTO_EXTS.includes(ext);
+    const isVideo = item.fileType === "video" || VIDEO_EXTS.includes(ext);
+    const isAudio = item.fileType === "audio" || item.fileType === "voice" || AUDIO_EXTS.includes(ext);
+
     if (item.type === "folder") {
+      setSelectedItems(new Set());
+      setLastSelectedIndex(null);
+      setIsSelectionMode(false);
       onNavigate(item.name);
-    } else if (item.fileType === "photo" && item.file_unique_id) {
-      // Open image in viewer immediately with authenticated streaming URL
+    } else if (isPhoto) {
       const baseUrl = getApiBaseUrl();
-      const token = localStorage.getItem('auth_token');
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-      const imageUrl = baseUrl 
-        ? `${baseUrl}/dl/${encodeURIComponent(item.name)}${tokenParam}` 
-        : `/dl/${encodeURIComponent(item.name)}${tokenParam}`;
-      
+      const sep = tokenParam ? '&' : '?';
+      const imageUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
       setImageViewer({ url: imageUrl, fileName: item.name });
-    } else if ((item.fileType === "video" || item.fileType === "audio" || item.fileType === "voice") && item.file_unique_id) {
-      console.log("Opening media in built-in streaming player");
+    } else if (isVideo || isAudio) {
+      console.log("Opening media in built-in player");
       const baseUrl = getApiBaseUrl();
-      const token = localStorage.getItem('auth_token');
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-      const mediaUrl = baseUrl 
-        ? `${baseUrl}/dl/${encodeURIComponent(item.name)}${tokenParam}` 
-        : `/dl/${encodeURIComponent(item.name)}${tokenParam}`;
+      const sep = tokenParam ? '&' : '?';
+      const mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
       
-      // Open media player immediately for true progressive streaming
       setMediaPlayer({ 
         url: mediaUrl, 
         fileName: item.name, 
-        fileType: item.fileType as "video" | "audio" | "voice" 
+        fileType: isVideo ? "video" : (item.fileType as "audio" | "voice" || "audio"),
+        fileItem: item,
       });
+    } else {
+      // For document/archive or other types, trigger download
+      onDownload(item);
     }
   };
+
+  const handleItemClick = (e: React.MouseEvent, item: FileItem, index: number) => {
+    if (isLongPressRef.current) {
+      isLongPressRef.current = false;
+      return;
+    }
+
+    // Range select with Shift
+    if (e.shiftKey && lastSelectedIndex !== null) {
+      const start = Math.min(lastSelectedIndex, index);
+      const end = Math.max(lastSelectedIndex, index);
+      const newSelected = new Set(selectedItems);
+      for (let i = start; i <= end; i++) {
+        if (items[i]) newSelected.add(items[i].name);
+      }
+      setSelectedItems(newSelected);
+      setIsSelectionMode(true);
+      return;
+    } else if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Cmd toggle
+      const newSelected = new Set(selectedItems);
+      if (newSelected.has(item.name)) {
+        newSelected.delete(item.name);
+        if (newSelected.size === 0) setIsSelectionMode(false);
+      } else {
+        newSelected.add(item.name);
+        setIsSelectionMode(true);
+      }
+      setSelectedItems(newSelected);
+      setLastSelectedIndex(index);
+      return;
+    }
+
+    // When multi-selection mode is active (activated via circle checkbox or select all)
+    if (isSelectionMode && selectedItems.size > 0) {
+      const newSelected = new Set(selectedItems);
+      if (newSelected.has(item.name)) {
+        newSelected.delete(item.name);
+        if (newSelected.size === 0) setIsSelectionMode(false);
+      } else {
+        newSelected.add(item.name);
+      }
+      setSelectedItems(newSelected);
+      setLastSelectedIndex(index);
+      return;
+    }
+
+    // Normal mode: Single click/tap OPENS IMMEDIATELY! (Both folders and files)
+    // Selection happens only when clicking the circular checkbox!
+    setSelectedItems(new Set());
+    setLastSelectedIndex(null);
+    setIsSelectionMode(false);
+    handleItemOpen(item);
+  };
+
+  const handleCheckboxClick = (e: React.MouseEvent, item: FileItem, index: number) => {
+    e.stopPropagation();
+    lastTapRef.current = null;
+    const newSelected = new Set(selectedItems);
+    if (newSelected.has(item.name)) {
+      newSelected.delete(item.name);
+      if (newSelected.size === 0) {
+        setIsSelectionMode(false);
+      }
+    } else {
+      newSelected.add(item.name);
+      setIsSelectionMode(true);
+    }
+    setSelectedItems(newSelected);
+    setLastSelectedIndex(index);
+  };
+
+  const handleSelectAllToggle = () => {
+    if (selectedItems.size === items.length) {
+      setSelectedItems(new Set());
+      setLastSelectedIndex(null);
+      setIsSelectionMode(false);
+    } else {
+      setSelectedItems(new Set(items.map(i => i.name)));
+      setIsSelectionMode(true);
+    }
+  };
+
+  const handleBatchDownload = async () => {
+    const filesToDownload = items.filter(
+      item => selectedItems.has(item.name) && item.type !== "folder"
+    );
+
+    if (filesToDownload.length === 0) {
+      toast.info("No downloadable files selected (folders cannot be downloaded directly)");
+      return;
+    }
+
+    toast.info(`Queueing ${filesToDownload.length} file${filesToDownload.length > 1 ? 's' : ''} for download...`);
+    for (const file of filesToDownload) {
+      try {
+        await onDownload(file);
+      } catch (err) {
+        console.error("Error downloading file:", file.name, err);
+      }
+    }
+  };
+
+  const handleConfirmBatchDelete = async () => {
+    const itemsToDelete = items.filter(item => selectedItems.has(item.name));
+    
+    // Protect system folders in root Home
+    const validItemsToDelete = itemsToDelete.filter(item => {
+      if (
+        currentPath && currentPath.length === 1 && 
+        currentPath[0] === "Home" && 
+        ["Images", "Documents", "Audio", "Voice Messages", "Videos"].includes(item.name)
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    if (validItemsToDelete.length === 0) {
+      toast.error("Cannot delete default system folders");
+      setBatchDeleteDialogOpen(false);
+      return;
+    }
+
+    setIsBatchDeleting(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    const baseUrl = getApiBaseUrl();
+    const apiUrl = baseUrl ? `${baseUrl}` : '';
+
+    for (const item of validItemsToDelete) {
+      try {
+        const response = await fetchWithTimeout(`${apiUrl}/files/delete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify({
+            file_id: item.id,
+          }),
+        }, 5000);
+
+        if (response.ok) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (e) {
+        failCount++;
+      }
+    }
+
+    setIsBatchDeleting(false);
+    setBatchDeleteDialogOpen(false);
+    setSelectedItems(new Set());
+    setLastSelectedIndex(null);
+
+    if (successCount > 0) {
+      toast.success(`Deleted ${successCount} item${successCount > 1 ? 's' : ''}`);
+      if (onRefresh) {
+        onRefresh();
+      }
+    }
+    if (failCount > 0) {
+      toast.error(`Failed to delete ${failCount} item${failCount > 1 ? 's' : ''}`);
+    }
+  };
+
+  const selectedFilesCount = items.filter(
+    item => selectedItems.has(item.name) && item.type !== "folder"
+  ).length;
 
   const handleDragStart = (e: React.DragEvent, item: FileItem) => {
     setDraggedItem(item);
@@ -1210,6 +1519,13 @@ export const FileGrid = ({
       
       <div
         className={`flex-1 overflow-y-auto p-4 ${isDragActive ? 'bg-blue-50 border-2 border-dashed border-blue-500 rounded-lg' : ''}`}
+        onClick={(e) => {
+          const target = e.target as HTMLElement;
+          if (target === e.currentTarget || target.getAttribute('data-grid-background') === "true") {
+            setSelectedItems(new Set());
+            setLastSelectedIndex(null);
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1236,13 +1552,91 @@ export const FileGrid = ({
             </div>
           </div>
         )}
+
+        {/* Google Drive-style Selection Action Bar */}
+        {selectedItems.size > 0 && (
+          <div className="sticky top-0 z-30 mb-3 flex items-center justify-between gap-2 px-3 py-2 bg-blue-500/10 dark:bg-blue-500/20 backdrop-blur-md border border-blue-500/30 rounded-xl shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedItems(new Set());
+                  setLastSelectedIndex(null);
+                }}
+                className="p-1.5 rounded-full hover:bg-background/80 active:bg-background text-muted-foreground hover:text-foreground transition-colors"
+                title="Clear selection (Esc)"
+                aria-label="Clear selection"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <span className="text-sm font-semibold text-blue-600 dark:text-blue-400 truncate">
+                {selectedItems.size} {selectedItems.size === 1 ? "selected" : "selected"}
+              </span>
+              <div className="h-4 w-px bg-blue-500/20 hidden sm:block" />
+              <button
+                type="button"
+                onClick={handleSelectAllToggle}
+                className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline transition-colors hidden sm:inline-block"
+              >
+                {selectedItems.size === items.length ? "Deselect all" : "Select all"}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                onClick={handleBatchDownload}
+                disabled={selectedFilesCount === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-background hover:bg-accent border border-border/60 text-foreground transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Download selected files"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Download</span>
+                {selectedFilesCount > 0 && <span className="text-[11px] text-muted-foreground">({selectedFilesCount})</span>}
+              </button>
+
+              {selectedItems.size === 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedName = Array.from(selectedItems)[0];
+                    const found = items.find(i => i.name === selectedName);
+                    if (found) {
+                      setPropertiesItem(found);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-background hover:bg-accent border border-border/60 text-foreground transition-colors shadow-sm"
+                  title="View Properties (Alt+Enter)"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Properties</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setBatchDeleteDialogOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 transition-colors shadow-sm"
+                title="Delete selected items"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Delete</span>
+                <span className="text-[11px]">({selectedItems.size})</span>
+              </button>
+            </div>
+          </div>
+        )}
         
         {viewMode === "grid" ? (
-          <div className="grid grid-cols-4 xs:grid-cols-5 sm:grid-cols-6 md:grid-cols-7 lg:grid-cols-8 xl:grid-cols-9 2xl:grid-cols-12 gap-1">
+          <div 
+            data-grid-background="true"
+            className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-9 2xl:grid-cols-12 gap-2 sm:gap-1.5"
+          >
             {items.map((item, index) => {
               const isRenaming = renamingItem?.index === index;
               const isDragging = draggedItem?.name === item.name;
               const isCut = cutItem?.name === item.name && cutItem?.id === item.id; // Check if this item is cut
+              const isSelected = selectedItems.has(item.name);
 
               return (
                 <div
@@ -1257,50 +1651,131 @@ export const FileGrid = ({
                     e.stopPropagation();
                     // Additional prevention of default context menu
                     e.nativeEvent.preventDefault();
-                    !isRenaming && handleContextMenu(e, item, index);
+                    if (!isRenaming) {
+                      if (!selectedItems.has(item.name)) {
+                        setSelectedItems(new Set([item.name]));
+                        setLastSelectedIndex(index);
+                      }
+                      handleContextMenu(e, item, index);
+                    }
                   }}
-                  className={`flex flex-col items-center p-1.5 rounded-lg transition-all duration-200 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] ${isDragging ? "opacity-50 scale-95" : ""}
-                    ${isCut ? "opacity-50" : ""} // Apply fade effect to cut items
+                  onTouchStart={(e) => handleTouchStart(e, item, index)}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={handleTouchEnd}
+                  onClick={(e) => {
+                    if (!isRenaming) {
+                      handleItemClick(e, item, index);
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    if (!isRenaming) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleItemOpen(item);
+                    }
+                  }}
+                  className={`group relative flex flex-col items-center p-2 sm:p-1.5 rounded-xl sm:rounded-lg border transition-all duration-200 cursor-pointer select-none
+                    ${isSelected 
+                      ? "bg-blue-500/15 dark:bg-blue-500/25 border-blue-500 ring-2 ring-blue-500/30 shadow-sm" 
+                      : "border-transparent hover:border-border/40 hover:bg-accent/20 hover:scale-[1.02] hover:shadow-md"
+                    }
+                    active:scale-[0.98] 
+                    ${isDragging ? "opacity-50 scale-95" : ""}
+                    ${isCut ? "opacity-50" : ""}
                     ${item.type === "folder" && draggedItem && draggedItem.name !== item.name
-                      ? "scale-105 transition-all duration-200"
+                      ? "scale-105 transition-all duration-200 ring-2 ring-primary/50"
                       : ""
                     }`}
                 >
-                  <button
-                    onClick={() => !isRenaming && handleItemClick(item)}
-                    className="flex flex-col items-center w-full hover:bg-accent rounded-md p-1 transition-all duration-200 group hover:scale-[1.02] active:scale-[0.98]"
-                  >
+                  {/* Google Drive circular checkbox */}
+                  {!isRenaming && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleCheckboxClick(e, item, index)}
+                      className={`absolute top-1.5 left-1.5 w-5 h-5 rounded-full flex items-center justify-center transition-all z-20 ${
+                        isSelected
+                          ? "bg-blue-600 text-white shadow-sm ring-1 ring-background scale-100 opacity-100"
+                          : selectedItems.size > 0
+                          ? "border-2 border-muted-foreground/70 bg-background/90 hover:border-blue-500 hover:bg-background opacity-80 sm:opacity-75 hover:opacity-100"
+                          : "border-2 border-muted-foreground/40 bg-background/80 hover:border-blue-500 opacity-0 group-hover:opacity-90"
+                      }`}
+                      title={isSelected ? "Deselect" : "Select"}
+                      aria-label={isSelected ? "Deselect" : "Select"}
+                    >
+                      <Check className={`w-3 h-3 stroke-[3] transition-opacity ${isSelected ? "opacity-100" : "opacity-0"}`} />
+                    </button>
+                  )}
+
+                  {/* 3-dots action button for touch access */}
+                  {!isRenaming && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openItemContextMenu(item, index, e.clientX, e.clientY);
+                      }}
+                      className="absolute top-1 right-1 p-1 rounded-full text-muted-foreground hover:text-foreground hover:bg-background/80 active:bg-accent transition-colors z-10 opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                      title="Options"
+                      aria-label="Options"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  <div className="flex flex-col items-center w-full rounded-md p-1 transition-all duration-200 pointer-events-none">
                     <div className="mb-1">{getFileIcon(item)}</div>
                     {isRenaming ? (
-                      <RenameInput
-                        initialName={item.name}
-                        onSave={onRenameConfirm}
-                        onCancel={onRenameCancel}
-                      />
+                      <div className="pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+                        <RenameInput
+                          initialName={item.name}
+                          onSave={onRenameConfirm}
+                          onCancel={onRenameCancel}
+                        />
+                      </div>
                     ) : (
-                      <span className="text-xs text-center break-words w-full text-foreground group-hover:text-accent-foreground">
+                      <span className={`text-xs text-center break-words w-full line-clamp-2 transition-colors ${
+                        isSelected ? "font-semibold text-blue-600 dark:text-blue-400" : "text-foreground group-hover:text-accent-foreground"
+                      }`}>
                         {item.name}
                       </span>
                     )}
-                  </button>
+                  </div>
                 </div>
               );
             })}
           </div>
         ) : (
-          <div className="flex flex-col">
-            {/* Table header */}
-            <div className="grid grid-cols-12 gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border bg-muted/50">
-              <div className="col-span-5">Name</div>
+          <div data-grid-background="true" className="flex flex-col">
+            {/* Table header - hidden on small mobile screens */}
+            <div className="hidden md:grid grid-cols-12 gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border bg-muted/50 items-center">
+              <div className="col-span-5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSelectAllToggle}
+                  className={`w-4 h-4 rounded flex items-center justify-center border transition-all ${
+                    selectedItems.size === items.length && items.length > 0
+                      ? "bg-blue-600 border-blue-600 text-white"
+                      : selectedItems.size > 0
+                      ? "bg-blue-600/30 border-blue-600 text-blue-600"
+                      : "border-muted-foreground/40 hover:border-foreground"
+                  }`}
+                  title={selectedItems.size === items.length ? "Deselect all" : "Select all"}
+                >
+                  <Check className={`w-3 h-3 stroke-[3] ${selectedItems.size > 0 ? "opacity-100" : "opacity-0"}`} />
+                </button>
+                <span>Name</span>
+              </div>
               <div className="col-span-3">Modified Date</div>
               <div className="col-span-2">Type</div>
               <div className="col-span-2 text-right">Size</div>
             </div>
-            <div className="space-y-0.5">
+            <div className="space-y-1 sm:space-y-0.5">
               {items.map((item, index) => {
                 const isRenaming = renamingItem?.index === index;
                 const isDragging = draggedItem?.name === item.name;
                 const isCut = cutItem?.name === item.name && cutItem?.id === item.id; // Check if this item is cut
+                const isSelected = selectedItems.has(item.name);
 
                 return (
                   <div
@@ -1310,22 +1785,65 @@ export const FileGrid = ({
                     onDragEnd={handleDragEnd}
                     onDragOver={item.type === "folder" ? (e) => handleItemDragOver(e, item) : undefined}
                     onDrop={item.type === "folder" ? (e) => handleItemDrop(e, item) : undefined}
-                    onContextMenu={(e) => !isRenaming && handleContextMenu(e, item, index)}
-                    className={`transition-all duration-200 hover:shadow-md active:scale-[0.98] ${isDragging ? "opacity-50" : ""} 
-                      ${isCut ? "opacity-50" : ""} // Apply fade effect to cut items
+                    onContextMenu={(e) => {
+                      if (!isRenaming) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!selectedItems.has(item.name)) {
+                          setSelectedItems(new Set([item.name]));
+                          setLastSelectedIndex(index);
+                        }
+                        handleContextMenu(e, item, index);
+                      }
+                    }}
+                    onTouchStart={(e) => handleTouchStart(e, item, index)}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                    onClick={(e) => {
+                      if (!isRenaming) {
+                        handleItemClick(e, item, index);
+                      }
+                    }}
+                    onDoubleClick={(e) => {
+                      if (!isRenaming) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleItemOpen(item);
+                      }
+                    }}
+                    className={`transition-all duration-200 cursor-pointer select-none ${
+                      isSelected 
+                        ? "bg-blue-500/15 dark:bg-blue-500/25 border-blue-500 ring-1 ring-blue-500/30 rounded-lg sm:rounded" 
+                        : "hover:bg-accent/40 rounded-lg sm:rounded border border-transparent"
+                    } ${isDragging ? "opacity-50" : ""} 
+                      ${isCut ? "opacity-50" : ""}
                       ${item.type === "folder" && draggedItem && draggedItem.name !== item.name
-                      ? "scale-105 transition-all duration-200"
+                      ? "scale-[1.01] ring-2 ring-primary/50"
                       : ""
                       }`}
                   >
-                    <button
-                      onClick={() => !isRenaming && handleItemClick(item)}
-                      className="col-span-12 w-full grid grid-cols-12 gap-4 p-1.5 rounded transition-all duration-200 group hover:bg-accent/50 active:scale-[0.995]"
-                    >
-                      <div className="col-span-5 flex items-center gap-3">
-                        <div className="flex-shrink-0 w-5 h-5">{getFileIcon(item)}</div>
+                    {/* Desktop table row (md and above) */}
+                    <div className="hidden md:grid col-span-12 w-full grid-cols-12 gap-4 p-2 items-center">
+                      <div className="col-span-5 flex items-center gap-3 min-w-0">
+                        {!isRenaming && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleCheckboxClick(e, item, index)}
+                            className={`w-4 h-4 rounded flex items-center justify-center transition-all flex-shrink-0 ${
+                              isSelected
+                                ? "bg-blue-600 text-white border border-blue-600"
+                                : selectedItems.size > 0
+                                ? "border border-muted-foreground/60 bg-background/80 hover:border-blue-500 opacity-80"
+                                : "border border-muted-foreground/40 bg-background/60 hover:border-blue-500 opacity-0 group-hover:opacity-100"
+                            }`}
+                            title={isSelected ? "Deselect" : "Select"}
+                          >
+                            <Check className={`w-3 h-3 stroke-[3] ${isSelected ? "opacity-100" : "opacity-0"}`} />
+                          </button>
+                        )}
+                        <div className="flex-shrink-0 w-5 h-5 pointer-events-none">{getFileIcon(item)}</div>
                         {isRenaming ? (
-                          <div className="flex-1">
+                          <div className="flex-1 pointer-events-auto" onClick={(e) => e.stopPropagation()}>
                             <RenameInput
                               initialName={item.name}
                               onSave={onRenameConfirm}
@@ -1333,21 +1851,90 @@ export const FileGrid = ({
                             />
                           </div>
                         ) : (
-                          <span className="text-sm text-foreground group-hover:text-accent-foreground truncate">
+                          <span className={`text-sm truncate pointer-events-none ${
+                            isSelected ? "font-medium text-blue-600 dark:text-blue-400" : "text-foreground group-hover:text-accent-foreground"
+                          }`}>
                             {item.name}
                           </span>
                         )}
                       </div>
-                      <div className="col-span-3 flex items-center text-xs text-muted-foreground">
+                      <div className="col-span-3 flex items-center text-xs text-muted-foreground pointer-events-none">
                         {item.modified ? new Date(item.modified).toLocaleDateString() : ''}
                       </div>
-                      <div className="col-span-2 flex items-center text-xs text-muted-foreground capitalize">
+                      <div className="col-span-2 flex items-center text-xs text-muted-foreground capitalize pointer-events-none">
                         {item.type === 'folder' ? 'Folder' : (item.fileType || 'File')}
                       </div>
-                      <div className="col-span-2 flex items-center justify-end text-xs text-muted-foreground">
+                      <div className="col-span-2 flex items-center justify-end text-xs text-muted-foreground pointer-events-none">
                         {item.type === 'folder' ? '' : (item.size ? formatFileSize(item.size) : '')}
                       </div>
-                    </button>
+                    </div>
+
+                    {/* Mobile optimized list row (< md) */}
+                    <div className="md:hidden flex items-center justify-between p-2.5 rounded-xl gap-3 border border-border/30">
+                      {/* Selection checkbox */}
+                      {!isRenaming && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleCheckboxClick(e, item, index)}
+                          className={`w-5 h-5 rounded-full flex items-center justify-center transition-all shrink-0 ${
+                            isSelected
+                              ? "bg-blue-600 text-white ring-1 ring-background scale-100 opacity-100"
+                              : selectedItems.size > 0
+                              ? "border-2 border-muted-foreground/70 bg-background/90 hover:border-blue-500 opacity-90"
+                              : "border-2 border-muted-foreground/40 bg-background/70 opacity-0 group-hover:opacity-70 w-0 p-0 border-0 overflow-hidden"
+                          }`}
+                          title={isSelected ? "Deselect" : "Select"}
+                        >
+                          <Check className={`w-3 h-3 stroke-[3] ${isSelected ? "opacity-100" : "opacity-0"}`} />
+                        </button>
+                      )}
+
+                      <div className="flex items-center gap-3 min-w-0 flex-1 pointer-events-none">
+                        <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center">
+                          {getFileIcon(item)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          {isRenaming ? (
+                            <div className="pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+                              <RenameInput
+                                initialName={item.name}
+                                onSave={onRenameConfirm}
+                                onCancel={onRenameCancel}
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <p className={`text-sm font-medium truncate ${
+                                isSelected ? "text-blue-600 dark:text-blue-400" : "text-foreground"
+                              }`}>
+                                {item.name}
+                              </p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {item.type === 'folder' 
+                                  ? 'Folder' 
+                                  : `${item.size ? formatFileSize(item.size) : ''}${item.size && item.modified ? ' • ' : ''}${item.modified ? new Date(item.modified).toLocaleDateString() : ''}`}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {!isRenaming && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openItemContextMenu(item, index, e.clientX, e.clientY);
+                          }}
+                          className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent active:bg-accent/80 shrink-0 z-10"
+                          title="Options"
+                          aria-label="Options"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -1381,6 +1968,7 @@ export const FileGrid = ({
             currentPath[0] === "Home" && 
             ["Images", "Documents", "Audio", "Voice Messages", "Videos"].includes(contextMenu.itemName)
           }
+          onProperties={() => contextMenu.item && setPropertiesItem(contextMenu.item)}
         />
       )}
 
@@ -1411,6 +1999,11 @@ export const FileGrid = ({
           mediaUrl={mediaPlayer.url}
           fileName={mediaPlayer.fileName}
           fileType={mediaPlayer.fileType}
+          onDownload={() => {
+            if (mediaPlayer.fileItem) {
+              onDownload(mediaPlayer.fileItem);
+            }
+          }}
           onClose={() => {
             // Revoke the object URL to free memory
             if (mediaPlayer.url.startsWith('blob:')) {
@@ -1431,6 +2024,43 @@ export const FileGrid = ({
       <IndexChatDialog
         open={showIndexChatDialog}
         onOpenChange={setShowIndexChatDialog}
+      />
+
+      {/* Batch Delete Confirmation Dialog */}
+      <AlertDialog open={batchDeleteDialogOpen} onOpenChange={setBatchDeleteDialogOpen}>
+        <AlertDialogContent className="bg-background/95 backdrop-blur-md border border-border rounded-xl shadow-2xl max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedItems.size} {selectedItems.size === 1 ? 'item' : 'items'}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete {selectedItems.size} selected {selectedItems.size === 1 ? 'item' : 'items'}? Any selected folders will also have their contents deleted. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBatchDeleting} onClick={() => setBatchDeleteDialogOpen(false)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isBatchDeleting}
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirmBatchDelete();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isBatchDeleting ? "Deleting..." : `Delete (${selectedItems.size})`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Properties Dialog */}
+      <PropertiesDialog
+        open={propertiesItem !== null}
+        item={propertiesItem}
+        currentPath={currentPath}
+        currentApiPath={currentApiPath}
+        onClose={() => setPropertiesItem(null)}
+        onDownload={onDownload}
       />
     </div>
   );

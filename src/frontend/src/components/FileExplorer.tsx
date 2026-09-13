@@ -376,35 +376,23 @@ export const FileExplorer = () => {
   };
 
   const handleCopy = (item: FileItem) => {
-    // Construct the source path correctly
-    let sourcePath = "/";
-    if (currentPath.length > 1) {
-      // For all folder types, we construct the path consistently
-      sourcePath = `/${currentPath.join('/')}`;
-    }
+    // Determine source path from item or current path
+    const sourcePath = item.file_path || currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
     copyItem(item, sourcePath);
     toast.success(`Copied "${item.name}"`);
   };
 
   const handleCut = (item: FileItem) => {
-    // Construct the source path correctly
-    let sourcePath = "/";
-    if (currentPath.length > 1) {
-      // For all folder types, we construct the path consistently
-      sourcePath = `/${currentPath.join('/')}`;
-    }
+    // Determine source path from item or current path
+    const sourcePath = item.file_path || currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
     cutItem(item, sourcePath);
     toast.success(`Cut "${item.name}"`);
   };
 
   const handlePaste = async () => {
     try {
-      // Construct the target path
-      let targetPath = "/";
-      if (currentPath.length > 1) {
-        // For all folder types, we construct the path consistently
-        targetPath = `/${currentPath.join('/')}`;
-      }
+      // Construct the target path using current location
+      const targetPath = currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
       
       await pasteItem(targetPath);
       toast.success("Operation completed successfully");
@@ -527,45 +515,29 @@ export const FileExplorer = () => {
 
   const handleMove = async (item: FileItem, targetFolder: FileItem) => {
     try {
-      // Construct the source path correctly
-      let sourcePath = "/";
-      if (currentPath.length > 1) {
-        // For all folder types, we construct the path consistently
-        sourcePath = `/${currentPath.join('/')}`;
-      }
+      // Determine source path from item or current path
+      let sourcePath = item.file_path || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
       
-      // Construct the target path based on the target folder
-      let targetPath = "/";
+      // Construct the target path dynamically based on targetFolder's actual location
+      let targetPath = "/Home";
       
-      // Handle moving to Home (root)
       if (targetFolder.name === "Home") {
-        targetPath = "/";
-      } 
-      // Handle default folders (they are now in the database)
-      else if (targetFolder.name === "Images" || 
-           targetFolder.name === "Documents" || 
-           targetFolder.name === "Videos" || 
-           targetFolder.name === "Audio" || 
-           targetFolder.name === "Voice Messages") {
-        targetPath = `/Home/${targetFolder.name}`;
-      }
-      // Handle user-created folders
-      else {
-        // Construct the target path consistently
-        if (currentPath.length > 1) {
-          // For all cases, we join the currentPath and append the target folder name
-          targetPath = `/${currentPath.join('/')}/${targetFolder.name}`;
-        } else {
-          // We're at root level
-          targetPath = `/${targetFolder.name}`;
-        }
+        targetPath = "/Home";
+      } else if (targetFolder.file_path) {
+        // Use the folder's actual parent path in the file tree
+        const parent = targetFolder.file_path.replace(/\/+$/, '');
+        targetPath = parent && parent !== "/" ? `${parent}/${targetFolder.name}` : `/${targetFolder.name}`;
+      } else {
+        // Fallback using currentApiPath
+        const current = currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
+        targetPath = `${current.replace(/\/+$/, '')}/${targetFolder.name}`;
       }
       
       // Ensure paths are properly formatted
       sourcePath = sourcePath.replace(/\/+/g, '/'); // Remove duplicate slashes
       targetPath = targetPath.replace(/\/+/g, '/'); // Remove duplicate slashes
       
-      // Ensure targetPath doesn't end with a slash unless it's the root
+      // Ensure targetPath doesn't end with a slash unless it's root
       if (targetPath !== "/" && targetPath.endsWith("/")) {
         targetPath = targetPath.slice(0, -1);
       }
@@ -705,6 +677,24 @@ export const FileExplorer = () => {
       setSelectedFilter(filter);
     }
   }, [currentPath, selectedFilter]);
+
+  // Sync category changes with NavigationSidebar for mobile
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('currentCategoryChanged', { detail: { filter: selectedFilter } }));
+  }, [selectedFilter]);
+
+  useEffect(() => {
+    const handleCategoryChange = (e: CustomEvent) => {
+      if (e.detail?.filter) {
+        setShowProfile(false);
+        setShowSettings(false);
+        setShowUserManagement(false);
+        handleFilterChange(e.detail.filter);
+      }
+    };
+    window.addEventListener('changeCategory', handleCategoryChange as EventListener);
+    return () => window.removeEventListener('changeCategory', handleCategoryChange as EventListener);
+  }, []);
 
   return (
     <div className="flex h-full bg-background text-foreground select-none">

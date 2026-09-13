@@ -11,6 +11,10 @@ services:
     env_file: .env
     ports:
       - "9000:8000"
+    volumes:
+      - ./src/frontend/dist:/app/src/frontend/dist
+      - ./src/Backend:/app/src/Backend
+      - ./.env:/app/.env
     depends_on:
       - mongo
 

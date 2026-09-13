@@ -316,8 +316,7 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="Cannot upload empty files")
 
         file_extension = os.path.splitext(file.filename)[1].lower()
-        file_type = "document"
-        if file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm']:
+        if file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.3gp', '.ogv']:
             file_type = "video"
         elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
             file_type = "audio"

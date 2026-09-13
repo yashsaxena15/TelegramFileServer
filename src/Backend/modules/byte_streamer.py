@@ -33,7 +33,7 @@ class ByteStreamer:
 
     async def get_file_properties(self, chat_id: int, message_id: int, client: Client = None) -> FileId:
         c = client or self.client
-        key = (getattr(c, 'name', 'default'), message_id)
+        key = (getattr(c, 'name', 'default'), int(chat_id), int(message_id))
         if key not in self.__cached_file_ids:
             file_id = await get_file_ids(c, int(chat_id), int(message_id))
             if not file_id:
@@ -43,6 +43,149 @@ class ByteStreamer:
                 return None
             self.__cached_file_ids[key] = file_id
         return self.__cached_file_ids[key]
+
+    async def yield_parts(self, parts_to_stream: list, chunk_size: int, client_list: list = None):
+        """
+        Stream one or more parts of a file seamlessly across multiple Telegram messages.
+        Each item in parts_to_stream is a dict with:
+        {
+            'chat_id': int,
+            'message_id': int,
+            'part_from_byte': int,
+            'part_until_byte': int,
+            'part_index': int
+        }
+        """
+        active_clients = client_list or [self.client]
+
+        for part_info in parts_to_stream:
+            chat_id = part_info["chat_id"]
+            message_id = part_info["message_id"]
+            part_from = part_info["part_from_byte"]
+            part_until = part_info["part_until_byte"]
+            part_idx_num = part_info.get("part_index", 1)
+
+            if part_until < part_from:
+                continue
+
+            # Gather workers for this part's message
+            workers = []
+            for c in active_clients:
+                if getattr(c, 'is_connected', False):
+                    try:
+                        fid = await self.get_file_properties(chat_id=chat_id, message_id=message_id, client=c)
+                        if fid:
+                            workers.append((c, fid))
+                    except Exception as ex:
+                        LOGGER.debug(f"Client {getattr(c, 'name', str(c))} could not get fid for part {part_idx_num}: {ex}")
+
+            if not workers:
+                try:
+                    fid = await self.get_file_properties(chat_id=chat_id, message_id=message_id, client=self.client)
+                    if fid:
+                        workers = [(self.client, fid)]
+                except Exception as ex:
+                    LOGGER.error(f"Fallback client failed for part {part_idx_num}: {ex}")
+
+            if not workers:
+                LOGGER.error(f"No active workers found for part {part_idx_num} (chat {chat_id}, msg {message_id})")
+                return
+
+            LOGGER.info(f"Yielding part {part_idx_num} (bytes {part_from}-{part_until}) with {len(workers)} worker(s)")
+
+            # Prepare media sessions
+            worker_sessions = []
+            for w_c, w_fid in workers:
+                sess = await self.generate_media_session(w_c, w_fid)
+                loc = await self.get_location(w_fid)
+                if sess and loc:
+                    worker_sessions.append((w_c, sess, loc))
+
+            if not worker_sessions:
+                LOGGER.error(f"No valid media sessions for part {part_idx_num}")
+                return
+
+            for w_c, _ in workers:
+                if hasattr(w_c, 'add_workload'):
+                    w_c.add_workload(1)
+
+            offset = part_from - (part_from % chunk_size)
+            first_part_cut = part_from - offset
+            last_part_cut = (part_until % chunk_size) + 1
+            part_count = math.ceil((part_until + 1) / chunk_size) - math.floor(offset / chunk_size)
+
+            num_workers = len(worker_sessions)
+            PREFETCH_COUNT = max(4, min(num_workers * 2, 12))
+
+            async def fetch_part_chunk(chunk_seq: int, chunk_offset: int) -> bytes:
+                for attempt in range(min(3, num_workers)):
+                    w_c, sess, loc = worker_sessions[(chunk_seq - 1 + attempt) % num_workers]
+                    try:
+                        r = await sess.send(
+                            raw.functions.upload.GetFile(
+                                location=loc, offset=chunk_offset, limit=chunk_size
+                            ),
+                            timeout=15,
+                        )
+                        if isinstance(r, raw.types.upload.File):
+                            return r.bytes
+                    except (TimeoutError, OSError, asyncio.TimeoutError) as e:
+                        if attempt == min(3, num_workers) - 1:
+                            LOGGER.warning(f"Timeout fetching chunk {chunk_seq} from {getattr(w_c, 'name', str(w_c))}: {e}")
+                        await asyncio.sleep(0.2)
+                    except Exception as e:
+                        if attempt == min(3, num_workers) - 1:
+                            LOGGER.warning(f"Error fetching chunk {chunk_seq} from {getattr(w_c, 'name', str(w_c))}: {e}")
+                        await asyncio.sleep(0.2)
+                return b""
+
+            tasks: Dict[int, asyncio.Task] = {}
+            next_to_schedule = 1
+            current_chunk = 1
+
+            try:
+                while next_to_schedule <= min(part_count, PREFETCH_COUNT):
+                    p_offset = offset + (next_to_schedule - 1) * chunk_size
+                    tasks[next_to_schedule] = asyncio.create_task(fetch_part_chunk(next_to_schedule, p_offset))
+                    next_to_schedule += 1
+
+                for current_chunk in range(1, part_count + 1):
+                    if next_to_schedule <= part_count:
+                        p_offset = offset + (next_to_schedule - 1) * chunk_size
+                        tasks[next_to_schedule] = asyncio.create_task(fetch_part_chunk(next_to_schedule, p_offset))
+                        next_to_schedule += 1
+
+                    task = tasks.pop(current_chunk, None)
+                    if not task:
+                        break
+
+                    chunk = await task
+                    if not chunk:
+                        LOGGER.warning(f"Empty chunk at {current_chunk}/{part_count} for part {part_idx_num}")
+                        break
+
+                    if part_count == 1:
+                        yield chunk[first_part_cut:last_part_cut]
+                    elif current_chunk == 1:
+                        yield chunk[first_part_cut:]
+                    elif current_chunk == part_count:
+                        yield chunk[:last_part_cut]
+                    else:
+                        yield chunk
+
+            except (asyncio.CancelledError, GeneratorExit):
+                LOGGER.debug("Client cancelled streaming/download.")
+                return
+            except Exception as e:
+                LOGGER.error(f"Error during part streaming: {e}")
+                return
+            finally:
+                for t in tasks.values():
+                    if not t.done():
+                        t.cancel()
+                for w_c, _ in workers:
+                    if hasattr(w_c, 'add_workload'):
+                        w_c.add_workload(-1)
 
     async def yield_file(self, file_id: FileId, client, offset: int, first_part_cut: int, last_part_cut: int, part_count: int, chunk_size: int, workers: list = None):
         # Workload tracking
@@ -72,26 +215,25 @@ class ByteStreamer:
         PREFETCH_COUNT = max(4, min(num_workers * 2, 12))
 
         async def fetch_chunk(part_idx: int, part_offset: int) -> bytes:
-            w_c, sess, loc = worker_sessions[(part_idx - 1) % num_workers]
-            for attempt in range(3):
+            for attempt in range(min(3, num_workers)):
+                w_c, sess, loc = worker_sessions[(part_idx - 1 + attempt) % num_workers]
                 try:
                     r = await sess.send(
                         raw.functions.upload.GetFile(
                             location=loc, offset=part_offset, limit=chunk_size
                         ),
-                        timeout=60,
+                        timeout=15,
                     )
                     if isinstance(r, raw.types.upload.File):
                         return r.bytes
-                    return b""
-                except (TimeoutError, OSError) as e:
-                    if attempt == 2:
-                        LOGGER.warning(f"Timeout fetching part {part_idx} at offset {part_offset}: {e}")
-                        return b""
-                    await asyncio.sleep(0.3)
+                except (TimeoutError, OSError, asyncio.TimeoutError) as e:
+                    if attempt == min(3, num_workers) - 1:
+                        LOGGER.warning(f"Timeout fetching part {part_idx} from {getattr(w_c, 'name', str(w_c))}: {e}")
+                    await asyncio.sleep(0.2)
                 except Exception as e:
-                    LOGGER.error(f"Error fetching part {part_idx} at offset {part_offset}: {e}")
-                    return b""
+                    if attempt == min(3, num_workers) - 1:
+                        LOGGER.error(f"Error fetching part {part_idx} from {getattr(w_c, 'name', str(w_c))}: {e}")
+                    await asyncio.sleep(0.2)
             return b""
 
         tasks: Dict[int, asyncio.Task] = {}

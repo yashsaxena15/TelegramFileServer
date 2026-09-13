@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   FolderOpen,
   Pencil,
@@ -35,6 +36,7 @@ interface ContextMenuProps {
   isClipboardPasted?: boolean; // Add prop to track if clipboard item has been pasted
   hasClipboard?: () => boolean; // Add prop to track if there's clipboard content
   disableDelete?: boolean; // Add prop to disable delete option
+  onProperties?: () => void; // Add prop to view properties
 }
 
 interface MenuItem {
@@ -65,8 +67,10 @@ export const ContextMenu = ({
   isClipboardPasted, // Destructure the new prop
   hasClipboard, // Destructure the new prop
   disableDelete = false, // Destructure the new prop with default value
+  onProperties,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -135,6 +139,10 @@ export const ContextMenu = ({
         break;
       case "upload_folder":
         onUploadFolder?.();
+        onClose();
+        break;
+      case "properties":
+        onProperties?.();
         onClose();
         break;
       default:
@@ -226,9 +234,88 @@ export const ContextMenu = ({
         label: "Properties",
         action: "properties",
         shortcut: "Alt+Enter",
-        disabled: true,
       },
     ];
+
+  if (isMobile) {
+    return (
+      <>
+        {/* Backdrop for mobile */}
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs transition-opacity"
+          onClick={onClose}
+        />
+
+        {/* Bottom Sheet Card */}
+        <div
+          ref={menuRef}
+          className="fixed inset-x-0 bottom-0 z-50 bg-background border-t border-border rounded-t-2xl shadow-2xl overflow-hidden pb-6 pt-3 px-4 max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom duration-200"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          {/* Top handle pill */}
+          <div className="w-12 h-1 bg-muted-foreground/30 rounded-full mx-auto mb-3" />
+
+          {/* Item Name header if file or folder */}
+          {itemName && (
+            <div className="text-center pb-3 border-b border-border/60 mb-2">
+              <p className="text-sm font-semibold truncate text-foreground px-2">{itemName}</p>
+              <p className="text-xs text-muted-foreground capitalize">{itemType}</p>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            {menuItems.map((item, index) => {
+              if (item.divider) {
+                return (
+                  <div
+                    key={`divider-${index}`}
+                    className="h-px bg-border/50 my-1 mx-1"
+                  />
+                );
+              }
+
+              const Icon = item.icon;
+              const isDisabled = item.disabled || (item.action === "paste" && (!hasClipboard || !hasClipboard()));
+
+              return (
+                <button
+                  key={item.action}
+                  onClick={() => !isDisabled && handleAction(item.action)}
+                  disabled={isDisabled}
+                  className={`w-full flex items-center justify-between px-4 py-3 min-h-[44px] rounded-xl text-left text-sm transition-colors ${
+                    isDisabled
+                      ? "text-muted-foreground/40 cursor-not-allowed"
+                      : item.danger
+                      ? "text-destructive hover:bg-destructive/10 active:bg-destructive/20"
+                      : "text-foreground hover:bg-accent active:bg-accent/80"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    {Icon && (
+                      <Icon
+                        className={`w-5 h-5 flex-shrink-0 ${isDisabled ? "opacity-40" : ""}`}
+                      />
+                    )}
+                    <span className="font-medium text-sm">{item.label}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={onClose}
+            className="w-full mt-3 py-2.5 min-h-[44px] rounded-xl border border-border text-center text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent active:bg-accent/80 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </>
+    );
+  }
 
   // Adjust position to keep menu on screen
   const menuWidth = 280;

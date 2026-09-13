@@ -53,8 +53,26 @@ class_cache = {}
 @router.get("/dl/{file_name:path}")
 @router.head("/dl/{file_name:path}")
 async def stream_handler(request: Request, file_name: str):
-    # For download, explicitly set is_watch to False
-    request.state.is_watch = False
+    # Check if this request is for streaming/inline viewing or explicit download
+    range_header = request.headers.get("Range", "")
+    accept_header = request.headers.get("Accept", "")
+    sec_dest = request.headers.get("Sec-Fetch-Dest", "")
+    inline_query = request.query_params.get("inline") in ("1", "true") or request.query_params.get("watch") in ("1", "true")
+    download_query = request.query_params.get("download") in ("1", "true")
+
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    is_media_ext = ext in (
+        "mp4", "mkv", "webm", "avi", "mov", "flv", "wmv", "m4v", "3gp", "ts",
+        "mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "wma",
+        "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"
+    )
+
+    if download_query:
+        request.state.is_watch = False
+    elif inline_query or range_header or sec_dest in ("video", "audio", "image") or "video/" in accept_header or "audio/" in accept_header or is_media_ext:
+        request.state.is_watch = True
+    else:
+        request.state.is_watch = False
     # Handle download request
     
     # First try to get user from session auth or token auth (handled by middleware)
@@ -101,6 +119,13 @@ async def stream_handler(request: Request, file_name: str):
             if extracted_filename != decoded_file_name:
                 file_data = database.Files.find_one({"file_name": extracted_filename, "owner_id": user_id})
         
+        # If still not found, try without owner_id filter
+        if not file_data:
+            file_data = database.Files.find_one({"file_name": decoded_file_name})
+        if not file_data:
+            extracted_filename = os.path.basename(decoded_file_name)
+            file_data = database.Files.find_one({"file_name": extracted_filename})
+
         if not file_data:
             print(f"File not found in database for name: {decoded_file_name}")
             raise HTTPException(status_code=404, detail="File not found")
@@ -109,6 +134,11 @@ async def stream_handler(request: Request, file_name: str):
         file_unique_id = file_data.get("file_unique_id")
         chat_id = file_data.get("chat_id")
         message_id = file_data.get("message_id")
+        
+        is_split = file_data.get("is_split", False)
+        parts_list = file_data.get("parts") if is_split else None
+        total_file_size = file_data.get("file_size")
+        stored_file_name = file_data.get("file_name", decoded_file_name)
         
         if not file_unique_id or not chat_id or not message_id:
             raise HTTPException(status_code=404, detail="File not found")
@@ -123,16 +153,31 @@ async def stream_handler(request: Request, file_name: str):
         print(f"Exception looking up file with name {decoded_file_name}: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
     
-    try:
-        message = await client.get_messages(chat_id, message_id)
-        file = message.video or message.document or message.photo or message.audio or message.voice
-        if not file:
-            raise HTTPException(status_code=404, detail="File not found")
-        logger.info(f"File found: {file}")
-        file_hash = file.file_unique_id[:6]
-    except Exception as e:
-        print(f"Exception getting file from Telegram: {e}")
-        raise HTTPException(status_code=404, detail="File not found or inaccessible")
+    clients_to_try = [client]
+    if bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+        for c in bot_manager.client_list:
+            if c not in clients_to_try:
+                clients_to_try.append(c)
+
+    message = None
+    successful_client = None
+    for c in clients_to_try:
+        try:
+            msg = await c.get_messages(chat_id, message_id)
+            if msg and (msg.video or msg.document or msg.photo or msg.audio or msg.voice):
+                message = msg
+                successful_client = c
+                break
+        except Exception as e:
+            LOGGER.warning(f"Client {getattr(c, 'name', str(c))} failed to get_messages for chat {chat_id}, msg {message_id}: {e}")
+            continue
+
+    if not message:
+        raise HTTPException(status_code=404, detail="File not found or inaccessible from bots")
+
+    client = successful_client
+    file = message.video or message.document or message.photo or message.audio or message.voice
+    file_hash = file.file_unique_id[:6]
 
     is_split = file_data.get("is_split", False)
     parts = file_data.get("parts", [])
@@ -146,10 +191,9 @@ async def stream_handler(request: Request, file_name: str):
         id=message_id,
         file=file,
         secure_hash=file_hash,
-        is_split=is_split,
-        file_size=total_file_size,
-        file_name=file_name_db,
-        parts=parts
+        total_file_size=total_file_size,
+        parts_list=parts_list or parts,
+        file_name=stored_file_name or file_name_db
     )
 
 # parse_range_header function has been moved to streaming_utils module
@@ -207,15 +251,31 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
         print(f"Exception looking up file with ID {id}: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
     
-    try:
-        message = await client.get_messages(chat_id, message_id)
-        file = message.video or message.document or message.audio or message.voice or message.photo
-        if not file:
-            raise HTTPException(status_code=404, detail="File not found")
-        file_hash = file.file_unique_id[:6]
-    except Exception as e:
-        print(f"Exception getting file from Telegram: {e}")
-        raise HTTPException(status_code=404, detail="File not found or inaccessible")
+    clients_to_try = [client]
+    if bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+        for c in bot_manager.client_list:
+            if c not in clients_to_try:
+                clients_to_try.append(c)
+
+    message = None
+    successful_client = None
+    for c in clients_to_try:
+        try:
+            msg = await c.get_messages(chat_id, message_id)
+            if msg and (msg.video or msg.document or msg.audio or msg.voice or msg.photo):
+                message = msg
+                successful_client = c
+                break
+        except Exception as e:
+            LOGGER.warning(f"Client {getattr(c, 'name', str(c))} failed in stream_handler_for_watch for chat {chat_id}, msg {message_id}: {e}")
+            continue
+
+    if not message:
+        raise HTTPException(status_code=404, detail="File not found or inaccessible from bots")
+
+    client = successful_client
+    file = message.video or message.document or message.audio or message.voice or message.photo
+    file_hash = file.file_unique_id[:6]
 
     return await media_streamer(
         request,
@@ -407,106 +467,13 @@ async def media_streamer(
     id: int,
     file: raw.types.MessageMediaDocument,
     secure_hash: str,
+    total_file_size: int = None,
+    parts_list: list = None,
+    file_name: str = None,
     is_split: bool = False,
     file_size: int = None,
-    file_name: str = None,
-    parts: list = None
+    parts: list = None,
 ) -> StreamingResponse:
-    if is_split and parts:
-        range_header = request.headers.get("Range", "")
-        if hasattr(client, 'add_workload'):
-            client.add_workload(1)
-
-        tg_connect = class_cache.get(client)
-        if not tg_connect:
-            tg_connect = ByteStreamer(client)
-            class_cache[client] = tg_connect
-
-        total_size = file_size or sum(p.get("part_size", 0) for p in parts)
-        from_bytes, until_bytes = parse_range_header(range_header, total_size)
-        req_length = until_bytes - from_bytes + 1
-        chunk_size = 1024 * 1024
-
-        bot_manager = getattr(request.app.state, 'bot_manager', None)
-        active_clients = []
-        if bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
-            active_clients = [c for c in bot_manager.client_list if getattr(c, 'is_connected', False)]
-        if not active_clients:
-            active_clients = [client]
-
-        overlapping_parts = []
-        for p in parts:
-            p_start = p["start_byte"]
-            p_end = p["end_byte"]
-            if p_end < from_bytes or p_start > until_bytes:
-                continue
-
-            p_msg_id = p["message_id"]
-            p_chat_id = p.get("chat_id", chat_id)
-            p_workers = []
-            p_file_id = None
-
-            for c in active_clients:
-                try:
-                    c_fid = await tg_connect.get_file_properties(chat_id=p_chat_id, message_id=p_msg_id, client=c)
-                    if c_fid:
-                        p_workers.append((c, c_fid))
-                        if not p_file_id:
-                            p_file_id = c_fid
-                except Exception as ex:
-                    LOGGER.warning(f"Error getting file property for part msg {p_msg_id} on {getattr(c, 'name', c)}: {ex}")
-
-            if not p_workers and p_file_id:
-                p_workers = [(client, p_file_id)]
-
-            if p_file_id:
-                overlapping_parts.append({
-                    "part": p,
-                    "file_id": p_file_id,
-                    "workers": p_workers
-                })
-
-        body = tg_connect.yield_multipart_file(
-            overlapping_parts=overlapping_parts,
-            from_bytes=from_bytes,
-            until_bytes=until_bytes,
-            chunk_size=chunk_size
-        )
-
-        final_file_name = file_name or getattr(file, 'file_name', f"File_{id}")
-        mime_type = resolve_mime_type(final_file_name) if final_file_name else "application/octet-stream"
-        is_watch = hasattr(request.state, 'is_watch') and request.state.is_watch
-        content_disposition = f'inline; filename="{final_file_name}"' if is_watch else f'attachment; filename="{final_file_name}"'
-
-        headers = {
-            "Content-Type": mime_type,
-            "Content-Length": str(req_length),
-            "Content-Disposition": content_disposition,
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=3600, immutable",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
-        }
-        if is_watch and (mime_type.startswith('video/') or mime_type.startswith('audio/')):
-            headers["X-Content-Type-Options"] = "nosniff"
-            headers["X-Frame-Options"] = "SAMEORIGIN"
-
-        if range_header:
-            headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{total_size}"
-            status_code = 206
-        else:
-            status_code = 200
-
-        if hasattr(client, 'add_workload'):
-            client.add_workload(-1)
-
-        return StreamingResponse(
-            status_code=status_code,
-            content=body,
-            headers=headers,
-            media_type=mime_type,
-        )
-
     range_header = request.headers.get("Range", "")
     
     # Add workload to the client
@@ -517,94 +484,123 @@ async def media_streamer(
         tg_connect = ByteStreamer(client)
         class_cache[client] = tg_connect
 
-    file_id = await tg_connect.get_file_properties(chat_id=chat_id, message_id=id)
-    # if str(file_id.media_id)[:6] != secure_hash:
-    #     raise InvalidHash
+    # Determine true total file size
+    effective_file_size = total_file_size or file_size
+    if effective_file_size and effective_file_size > 0:
+        file_size = effective_file_size
+    elif hasattr(file, 'file_size') and file.file_size:
+        file_size = file.file_size
+    else:
+        file_size = 0
 
-    file_size = file.file_size
+    parts_list = parts_list or parts
+
     from_bytes, until_bytes = parse_range_header(range_header, file_size)
 
     chunk_size = 1024 * 1024
-    offset = from_bytes - (from_bytes % chunk_size)
-    first_part_cut = from_bytes - offset
-    last_part_cut = (until_bytes % chunk_size) + 1
     req_length = until_bytes - from_bytes + 1
-    part_count = math.ceil((until_bytes + 1) / chunk_size) - math.floor(offset / chunk_size)
 
-    # Collect all available bot workers that can access this file
+    # Prepare parts to stream
+    if not parts_list:
+        parts_list = [{
+            "part_index": 1,
+            "chat_id": chat_id,
+            "message_id": id,
+            "start_byte": 0,
+            "end_byte": file_size - 1,
+            "part_size": file_size,
+        }]
+
+    parts_to_stream = []
+    for p in parts_list:
+        p_start = p.get("start_byte", 0)
+        p_end = p.get("end_byte", p_start + p.get("part_size", 0) - 1)
+        if p_end < from_bytes or p_start > until_bytes:
+            continue
+
+        overlap_start = max(from_bytes, p_start)
+        overlap_end = min(until_bytes, p_end)
+
+        parts_to_stream.append({
+            "chat_id": p.get("chat_id", chat_id),
+            "message_id": p.get("message_id", id),
+            "part_from_byte": overlap_start - p_start,
+            "part_until_byte": overlap_end - p_start,
+            "part_index": p.get("part_index", 1),
+        })
+
+    # Collect active bot workers
     bot_manager = getattr(request.app.state, 'bot_manager', None)
-    workers = []
+    active_clients = []
     if bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
-        LOGGER.info(f"Bot manager found with {len(bot_manager.client_list)} clients in client_list")
-        for c in bot_manager.client_list:
-            c_name = getattr(c, 'name', str(c))
-            is_conn = getattr(c, 'is_connected', False)
-            if is_conn:
-                try:
-                    c_fid = await tg_connect.get_file_properties(chat_id=chat_id, message_id=id, client=c)
-                    LOGGER.info(f"Client {c_name}: c_fid={'VALID' if c_fid else 'NONE'}")
-                    if c_fid:
-                        workers.append((c, c_fid))
-                except Exception as ex:
-                    LOGGER.warning(f"Client {c_name} exception in get_file_properties: {ex}")
-            else:
-                LOGGER.info(f"Client {c_name} is NOT connected (is_connected={is_conn})")
-    else:
-        LOGGER.warning(f"Bot manager or client_list not available: bot_manager={bool(bot_manager)}")
+        active_clients = [c for c in bot_manager.client_list if getattr(c, 'is_connected', False)]
+    if not active_clients:
+        active_clients = [client]
 
-    if not workers:
-        workers = [(client, file_id)]
+    LOGGER.info(
+        f"Streaming range {from_bytes}-{until_bytes}/{file_size} across {len(parts_to_stream)} part(s) using {len(active_clients)} bot client(s)"
+    )
 
-    LOGGER.info(f"Streaming file with {len(workers)} active bot worker(s)")
-
-    body = tg_connect.yield_file(
-        file_id, client, offset, first_part_cut, last_part_cut, part_count, chunk_size, workers=workers
+    body = tg_connect.yield_parts(
+        parts_to_stream=parts_to_stream,
+        chunk_size=chunk_size,
+        client_list=active_clients,
     )
 
     # Check if this is a watch request
     is_watch = hasattr(request.state, 'is_watch') and request.state.is_watch
-    
 
-    if hasattr(file, 'file_name'):
-        file_name = file.file_name
+    if file_name:
+        resolved_file_name = file_name
+    elif hasattr(file, 'file_name') and file.file_name:
+        resolved_file_name = file.file_name
     elif hasattr(file, "width"):
-        file_name = f"Photo_{file.file_unique_id}.jpg"
-    else: 
-        file_name = f"Media_{file.file_unique_id}"
-    
-    if hasattr(file, 'mime_type'):
+        resolved_file_name = f"Photo_{file.file_unique_id}.jpg"
+    else:
+        resolved_file_name = f"Media_{file.file_unique_id}"
+
+    ext = resolved_file_name.rsplit(".", 1)[-1].lower() if "." in resolved_file_name else ""
+    ext_mime_map = {
+        "mp4": "video/mp4",
+        "m4v": "video/mp4",
+        "mkv": "video/x-matroska",
+        "webm": "video/webm",
+        "mov": "video/quicktime",
+        "avi": "video/x-msvideo",
+        "flv": "video/x-flv",
+        "wmv": "video/x-ms-wmv",
+        "ts": "video/mp2t",
+        "3gp": "video/3gpp",
+        "mp3": "audio/mpeg",
+        "wav": "audio/wav",
+        "ogg": "audio/ogg",
+        "opus": "audio/ogg",
+        "flac": "audio/flac",
+        "m4a": "audio/mp4",
+        "aac": "audio/aac",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+        "pdf": "application/pdf",
+    }
+
+    if hasattr(file, 'mime_type') and file.mime_type and file.mime_type not in ("application/octet-stream", "binary/octet-stream"):
         mime_type = file.mime_type
     else:
-        mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
-    # For watch requests, try to use a more browser-friendly MIME type if needed
-    if is_watch and mime_type == "application/octet-stream":
-        # If we can't determine the MIME type, try to guess based on file extension
-        guessed_mime = mimetypes.guess_type(file_name)[0]
-        if guessed_mime:
-            mime_type = guessed_mime
-        else:
-            # For video files, use a generic video MIME type that most browsers can handle
-            ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-            if ext in ("mp4", "m4v"):
-                mime_type = "video/mp4"
-            elif ext in ("webm",):
-                mime_type = "video/webm"
-            elif ext in ("mkv",):
-                mime_type = "video/x-matroska"
-            elif ext in ("mov",):
-                mime_type = "video/quicktime"
-            elif ext in ("avi",):
-                mime_type = "video/x-msvideo"
-            elif ext in ("flv",):
-                mime_type = "video/x-flv"
-            elif ext in ("wmv",):
-                mime_type = "video/x-ms-wmv"
-    
-    if not file_name and "/" in mime_type:
-        file_name = f"{secrets.token_hex(2)}.{mime_type.split('/')[1]}"
+        mime_type = ext_mime_map.get(ext) or mimetypes.guess_type(resolved_file_name)[0] or "application/octet-stream"
 
-    content_disposition = 'inline; filename="{}"'.format(file_name) if is_watch else 'attachment; filename="{}"'.format(file_name)
-    
+    # For watch/streaming requests, guarantee browser-friendly media MIME types
+    if is_watch and ext in ext_mime_map:
+        mime_type = ext_mime_map[ext]
+
+    if not resolved_file_name and "/" in mime_type:
+        resolved_file_name = f"{secrets.token_hex(2)}.{mime_type.split('/')[1]}"
+
+    content_disposition = 'inline; filename="{}"'.format(resolved_file_name) if is_watch else 'attachment; filename="{}"'.format(resolved_file_name)
+
     headers = {
         "Content-Type": mime_type,
         "Content-Length": str(req_length),
@@ -614,22 +610,22 @@ async def media_streamer(
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
     }
-    
+
     # Add additional headers for video streaming
     if is_watch and mime_type and (mime_type.startswith('video/') or mime_type.startswith('audio/')):
         headers["X-Content-Type-Options"] = "nosniff"
         headers["X-Frame-Options"] = "SAMEORIGIN"
-    
+
     if range_header:
         headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
         status_code = 206
     else:
         status_code = 200
-    
+
     # Remove workload when streaming is complete
     if hasattr(client, 'add_workload'):
         client.add_workload(-1)
-    
+
     return StreamingResponse(
         status_code=status_code,
         content=body,
