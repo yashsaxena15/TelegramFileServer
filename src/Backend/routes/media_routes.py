@@ -155,8 +155,16 @@ async def get_media_info(request: Request, file_name: str, token: Optional[str] 
         }
         return fallback
     except Exception as e:
-        logger.error(f"[MediaRoutes] ffprobe error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to probe media: {str(e)}")
+        logger.warning(f"[MediaRoutes] ffprobe error: {e}, using default fallback metadata")
+        return {
+            "file_name": actual_file_name,
+            "width": None,
+            "height": None,
+            "video_codec": None,
+            "duration": 0,
+            "audio_tracks": [{"index": 0, "stream_index": 1, "codec": "aac", "language": "Default", "title": "Default Audio"}],
+            "subtitle_tracks": []
+        }
 
     if proc.returncode != 0:
         logger.warning(f"[MediaRoutes] ffprobe exited with code {proc.returncode}: {stderr.decode('utf-8', errors='ignore')}")

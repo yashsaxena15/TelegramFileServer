@@ -15,6 +15,7 @@ interface DeleteDialogProps {
   itemType: "file" | "folder";
   onConfirm: () => void;
   onCancel: () => void;
+  isTrashMode?: boolean;
 }
 
 export const DeleteDialog = ({
@@ -23,18 +24,29 @@ export const DeleteDialog = ({
   itemType,
   onConfirm,
   onCancel,
+  isTrashMode = false,
 }: DeleteDialogProps) => {
-  // This dialog is now only used for backward compatibility
-  // The main delete confirmation uses DeleteConfirmDialog
   return (
     <AlertDialog open={open} onOpenChange={(open) => !open && onCancel()}>
-      <AlertDialogContent className="bg-background/80 backdrop-blur-md border border-border rounded-xl shadow-2xl">
+      <AlertDialogContent className="bg-background/95 backdrop-blur-md border border-border rounded-xl shadow-2xl">
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete {itemType}?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {isTrashMode ? `Permanently delete ${itemType}?` : `Move ${itemType} to Trash?`}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete "{itemName}"?
-            {itemType === "folder" && " This will delete all contents inside the folder."}
-            {" This action cannot be undone."}
+            {isTrashMode ? (
+              <>
+                Are you sure you want to permanently delete &quot;{itemName}&quot;?
+                {itemType === "folder" && " This will remove all files and subfolders permanently."}
+                {" This action cannot be undone."}
+              </>
+            ) : (
+              <>
+                Are you sure you want to move &quot;{itemName}&quot; to Trash?
+                {itemType === "folder" && " All items inside this folder will also be moved to Trash."}
+                {" You can restore it later from the Trash folder."}
+              </>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -43,7 +55,7 @@ export const DeleteDialog = ({
             onClick={onConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            Delete
+            {isTrashMode ? "Delete Forever" : "Move to Trash"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -83,15 +83,83 @@ def resolve_folder_info(folder_id: Optional[str], folder_path_param: Optional[st
     return None, "Folder", "/Home"
 
 
+# Folder creation constraints
+MAX_FOLDER_DEPTH = 100
+MAX_FOLDER_NAME_LENGTH = 60
+MAX_PATH_LENGTH = 1000
+FORBIDDEN_CHARS_PATTERN = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
+
+
+def calculate_folder_depth(path: str) -> int:
+    """Calculates subfolder depth relative to root (/Home or /)."""
+    clean = path.strip("/")
+    segments = [s for s in clean.split("/") if s and s != "Home"]
+    return len(segments)
+
+
+def validate_folder_name(name: str) -> str:
+    """Validates and trims a folder name against length and character rules."""
+    trimmed = name.strip()
+    if not trimmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Folder name cannot be empty."
+        )
+    if trimmed in [".", ".."]:
+        raise HTTPException(
+            status_code=400,
+            detail="Folder name cannot be '.' or '..'."
+        )
+    if len(trimmed) > MAX_FOLDER_NAME_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Folder name cannot exceed {MAX_FOLDER_NAME_LENGTH} characters (current length: {len(trimmed)})."
+        )
+    if FORBIDDEN_CHARS_PATTERN.search(trimmed):
+        raise HTTPException(
+            status_code=400,
+            detail='Folder name cannot contain any of the following characters: / \\ : * ? " < > |'
+        )
+    return trimmed
+
+
+def validate_folder_creation(folder_name: str, current_path: str) -> str:
+    """Validates folder name, subfolder depth limit, and total path length."""
+    valid_name = validate_folder_name(folder_name)
+    if valid_name.lower() in ["home", "trash", "starred", "telegram inbox", "inbox"] and current_path in ["/", "/Home", "Home", ""]:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot create folder with reserved name ('Home', 'Trash', 'Starred', 'Telegram Inbox') in the root directory."
+        )
+    current_depth = calculate_folder_depth(current_path)
+    if current_depth >= MAX_FOLDER_DEPTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum folder depth limit ({MAX_FOLDER_DEPTH} levels) reached. Cannot create deeper subfolders."
+        )
+    
+    # Calculate target path length
+    full_path = f"{current_path.rstrip('/')}/{valid_name}"
+    if len(full_path) > MAX_PATH_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total folder path length cannot exceed {MAX_PATH_LENGTH} characters."
+        )
+    return valid_name
+
+
 @router.post("/create")
 async def create_folder_route(request: CreateFolderRequest, user: User = Depends(require_auth)):
     try:
         user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-        success = database.Files.create_folder(request.folderName, request.currentPath, user_id)
+        valid_name = validate_folder_creation(request.folderName, request.currentPath)
+        success = database.Files.create_folder(valid_name, request.currentPath, user_id)
         if success:
-            return {"message": f"Folder '{request.folderName}' created successfully"}
+            return {"message": f"Folder '{valid_name}' created successfully"}
         else:
-            raise HTTPException(status_code=400, detail="Folder already exists")
+            raise HTTPException(status_code=400, detail=f"Folder '{valid_name}' already exists in this location")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating folder: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -101,11 +169,23 @@ async def create_folder_route(request: CreateFolderRequest, user: User = Depends
 async def create_folder_path_route(request: CreateFolderPathRequest, user: User = Depends(require_auth)):
     try:
         user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        clean_path = request.fullPath.strip("/")
+        parts = [p for p in clean_path.split("/") if p and p != "Home"]
+        if len(parts) > MAX_FOLDER_DEPTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Maximum folder depth limit ({MAX_FOLDER_DEPTH} levels) exceeded in path."
+            )
+        for part in parts:
+            validate_folder_name(part)
+        
         success = database.Files.create_folder_path(request.fullPath, user_id)
         if success:
             return {"message": f"Folder path '{request.fullPath}' created successfully"}
         else:
             return {"message": f"Folder path '{request.fullPath}' already exists or was created"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating folder path: {e}")
         raise HTTPException(status_code=500, detail=str(e))

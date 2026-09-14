@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { FileItem } from "@/components/types";
 import { TraversedFile } from "@/lib/folderTraversal"; // Add this import
-import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check, X, Trash2, Download, Info } from "lucide-react";
+import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check, X, Trash2, Download, Info, Star, RotateCcw } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
@@ -60,6 +60,9 @@ interface FileGridProps {
   onFileUploaded?: (file: FileItem) => void; // Callback for when a file is uploaded
   onItemsChange?: (items: FileItem[]) => void; // Callback for when items change
   onRefresh?: () => void; // Callback to refresh the file list
+  isTrashMode?: boolean;
+  onRestoreItem?: (item: FileItem) => void;
+  onToggleStar?: (item: FileItem) => void;
 }
 
 interface ContextMenuState {
@@ -101,6 +104,9 @@ export const FileGrid = ({
   onRefresh,
   currentPath,
   currentApiPath,
+  isTrashMode,
+  onRestoreItem,
+  onToggleStar,
 }: FileGridProps) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
@@ -605,10 +611,11 @@ export const FileGrid = ({
 
     const baseUrl = getApiBaseUrl();
     const apiUrl = baseUrl ? `${baseUrl}` : '';
+    const deleteEndpoint = isTrashMode ? `${apiUrl}/files/delete` : `${apiUrl}/files/trash`;
 
     for (const item of validItemsToDelete) {
       try {
-        const response = await fetchWithTimeout(`${apiUrl}/files/delete`, {
+        const response = await fetchWithTimeout(deleteEndpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -635,13 +642,17 @@ export const FileGrid = ({
     setLastSelectedIndex(null);
 
     if (successCount > 0) {
-      toast.success(`Deleted ${successCount} item${successCount > 1 ? 's' : ''}`);
+      toast.success(
+        isTrashMode
+          ? `Permanently deleted ${successCount} item${successCount > 1 ? 's' : ''}`
+          : `Moved ${successCount} item${successCount > 1 ? 's' : ''} to Trash`
+      );
       if (onRefresh) {
         onRefresh();
       }
     }
     if (failCount > 0) {
-      toast.error(`Failed to delete ${failCount} item${failCount > 1 ? 's' : ''}`);
+      toast.error(`Failed to process ${failCount} item${failCount > 1 ? 's' : ''}`);
     }
   };
 
@@ -1779,6 +1790,43 @@ export const FileGrid = ({
                     </button>
                   )}
 
+                  {/* Star or Restore button */}
+                  {!isRenaming && (
+                    isTrashMode ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onRestoreItem?.(item);
+                        }}
+                        className="absolute top-1 right-7 p-1 rounded-full text-blue-500 hover:text-blue-600 hover:bg-background/80 active:bg-accent transition-colors z-10"
+                        title="Restore"
+                        aria-label="Restore"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onToggleStar?.(item);
+                        }}
+                        className={`absolute top-1 right-7 p-1 rounded-full transition-colors z-10 ${
+                          item.starred
+                            ? "text-amber-500 opacity-100"
+                            : "text-muted-foreground hover:text-amber-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                        }`}
+                        title={item.starred ? "Remove from starred" : "Add to starred"}
+                        aria-label={item.starred ? "Remove from starred" : "Add to starred"}
+                      >
+                        <Star className={`w-4 h-4 ${item.starred ? "fill-amber-500 text-amber-500" : ""}`} />
+                      </button>
+                    )
+                  )}
+
                   {/* 3-dots action button for touch access */}
                   {!isRenaming && (
                     <button
@@ -1994,19 +2042,54 @@ export const FileGrid = ({
                       </div>
 
                       {!isRenaming && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openItemContextMenu(item, index, e.clientX, e.clientY);
-                          }}
-                          className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent active:bg-accent/80 shrink-0 z-10"
-                          title="Options"
-                          aria-label="Options"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0 z-10">
+                          {isTrashMode ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onRestoreItem?.(item);
+                              }}
+                              className="p-1.5 sm:p-2 rounded-full text-blue-500 hover:text-blue-600 hover:bg-accent active:bg-accent/80 transition-colors"
+                              title="Restore"
+                              aria-label="Restore"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onToggleStar?.(item);
+                              }}
+                              className={`p-1.5 sm:p-2 rounded-full transition-colors ${
+                                item.starred
+                                  ? "text-amber-500 opacity-100"
+                                  : "text-muted-foreground hover:text-amber-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                              }`}
+                              title={item.starred ? "Remove from starred" : "Add to starred"}
+                              aria-label={item.starred ? "Remove from starred" : "Add to starred"}
+                            >
+                              <Star className={`w-4 h-4 ${item.starred ? "fill-amber-500 text-amber-500" : ""}`} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openItemContextMenu(item, index, e.clientX, e.clientY);
+                            }}
+                            className="p-1.5 sm:p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent active:bg-accent/80"
+                            title="Options"
+                            aria-label="Options"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2043,9 +2126,9 @@ export const FileGrid = ({
             isClipboardPasted={isClipboardPasted}
             disableDelete={
               // Disable delete for specific virtual folders in Home
-              currentPath.length === 1 && 
+              Boolean(currentPath && currentPath.length === 1 && 
               currentPath[0] === "Home" && 
-              ["Images", "Documents", "Audio", "Voice Messages", "Videos"].includes(contextMenu.itemName)
+              ["Images", "Documents", "Audio", "Voice Messages", "Videos"].includes(contextMenu.itemName))
             }
             onProperties={() => contextMenu.item && setPropertiesItem(contextMenu.item)}
             isArchive={isArchiveItem}
@@ -2086,15 +2169,21 @@ export const FileGrid = ({
             onCompress={() => {
               setCompressDialog(true);
             }}
+            isStarred={contextMenu.item?.starred}
+            onToggleStar={() => contextMenu.item && onToggleStar?.(contextMenu.item)}
+            isTrashMode={isTrashMode}
+            onRestore={() => contextMenu.item && onRestoreItem?.(contextMenu.item)}
           />
         );
       })()}
 
       {/* Floating Upload Button */}
-      <FloatingUploadButton
-        onUploadFiles={onUploadFiles}
-        onUploadFolder={onUploadFolder}
-      />
+      {!isTrashMode && (
+        <FloatingUploadButton
+          onUploadFiles={onUploadFiles}
+          onUploadFolder={onUploadFolder}
+        />
+      )}
 
       {/* Image Viewer */}
       {imageViewer && (
@@ -2173,9 +2262,15 @@ export const FileGrid = ({
       <AlertDialog open={batchDeleteDialogOpen} onOpenChange={setBatchDeleteDialogOpen}>
         <AlertDialogContent className="bg-background/95 backdrop-blur-md border border-border rounded-xl shadow-2xl max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {selectedItems.size} {selectedItems.size === 1 ? 'item' : 'items'}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {isTrashMode
+                ? `Permanently delete ${selectedItems.size} ${selectedItems.size === 1 ? 'item' : 'items'}?`
+                : `Move ${selectedItems.size} ${selectedItems.size === 1 ? 'item' : 'items'} to Trash?`}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete {selectedItems.size} selected {selectedItems.size === 1 ? 'item' : 'items'}? Any selected folders will also have their contents deleted. This action cannot be undone.
+              {isTrashMode
+                ? `Are you sure you want to permanently delete ${selectedItems.size} selected ${selectedItems.size === 1 ? 'item' : 'items'}? Any selected folders will also have their contents permanently deleted. This action cannot be undone.`
+                : `Are you sure you want to move ${selectedItems.size} selected ${selectedItems.size === 1 ? 'item' : 'items'} to Trash? You can restore them later from the Trash.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2190,7 +2285,11 @@ export const FileGrid = ({
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isBatchDeleting ? "Deleting..." : `Delete (${selectedItems.size})`}
+              {isBatchDeleting
+                ? "Processing..."
+                : isTrashMode
+                ? `Delete Forever (${selectedItems.size})`
+                : `Move to Trash (${selectedItems.size})`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

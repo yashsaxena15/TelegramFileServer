@@ -737,29 +737,89 @@ export const api = {
             }
         }
 
-        // Step 3: Complete upload
+        // Step 3: Trigger completion (processed in background on server)
         const completeFormData = new FormData();
         completeFormData.append('upload_id', uploadId);
 
-        const completeRes = await fetch(`${apiUrl}/files/upload/complete`, {
-            method: 'POST',
-            headers: {
-                ...authHeaders
-            },
-            credentials: 'include',
-            body: completeFormData
-        });
+        let initialResponseData: any = null;
+        try {
+            const completeRes = await fetch(`${apiUrl}/files/upload/complete`, {
+                method: 'POST',
+                headers: {
+                    ...authHeaders
+                },
+                credentials: 'include',
+                body: completeFormData
+            });
 
-        if (!completeRes.ok) {
-            const errData = await completeRes.json().catch(() => ({}));
-            throw new Error(errData.detail || 'Failed to complete file upload');
+            if (completeRes.ok) {
+                initialResponseData = await completeRes.json().catch(() => null);
+            }
+        } catch (fetchErr) {
+            logger.warn('[API] /files/upload/complete connection dropped, checking status...', fetchErr);
         }
 
+        // Fast path: if already completed
+        if (initialResponseData?.status === 'completed' && initialResponseData?.file) {
+            if (onProgress) {
+                onProgress(100, file.size, file.size, '', '');
+            }
+            return {
+                message: initialResponseData.message || 'File uploaded successfully',
+                file: initialResponseData.file
+            };
+        }
+
+        // Step 4: Poll status until complete (handles large files saving to Telegram cloud)
         if (onProgress) {
-            onProgress(100, file.size, file.size, '', '');
+            onProgress(99, file.size, file.size, 'Saving to Telegram cloud...', '');
         }
 
-        return await completeRes.json();
+        const pollIntervalMs = 2000;
+        const maxPollTimeMs = 30 * 60 * 1000; // 30 minutes max for large files
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < maxPollTimeMs) {
+            await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+            try {
+                const statusRes = await fetch(`${apiUrl}/files/upload/status/${uploadId}`, {
+                    headers: {
+                        ...authHeaders
+                    },
+                    credentials: 'include'
+                });
+
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    if (statusData.status === 'completed') {
+                        if (onProgress) {
+                            onProgress(100, file.size, file.size, '', '');
+                        }
+                        return {
+                            message: statusData.message || 'File uploaded successfully',
+                            file: statusData.file
+                        };
+                    } else if (statusData.status === 'error') {
+                        throw new Error(statusData.error || 'Upload failed while saving to Telegram');
+                    } else {
+                        // Still processing
+                        if (onProgress) {
+                            onProgress(99, file.size, file.size, 'Saving to Telegram cloud...', '');
+                        }
+                    }
+                } else if (statusRes.status === 404) {
+                    throw new Error('Upload session expired or not found');
+                }
+            } catch (err: any) {
+                if (err.message && (err.message.includes('saving to Telegram') || err.message.includes('expired or not found'))) {
+                    throw err;
+                }
+                logger.warn('[API] Polling upload status transient error:', err);
+            }
+        }
+
+        throw new Error('Upload completion timed out. Please check your drive.');
     },
 
     async uploadFile(
@@ -767,8 +827,8 @@ export const api = {
         path: string = '/',
         onProgress?: (percent: number, loaded: number, total: number, speed?: string, eta?: string) => void
     ): Promise<UploadFileResponse> {
-        // Automatically use chunked uploader for large files (> 100MB) for maximum resilience
-        if (file.size > 100 * 1024 * 1024) {
+        // Automatically use chunked uploader for large files (> 50MB) for maximum resilience
+        if (file.size > 50 * 1024 * 1024) {
             return this.uploadFileChunked(file, path, onProgress);
         }
 
@@ -934,6 +994,110 @@ export const api = {
                 throw new Error("Authentication required. Please log in again.");
             }
             throw new Error(`Failed to create folder path: ${response.statusText}`);
+        }
+
+        return response.json();
+    },
+
+    async toggleStar(fileId: string, starred?: boolean): Promise<{ starred: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/files/star`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+            body: JSON.stringify({ file_id: fileId, starred }),
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to update star status');
+        }
+
+        return response.json();
+    },
+
+    async trashFile(fileId: string): Promise<{ message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/files/trash`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+            body: JSON.stringify({ file_id: fileId }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Failed to move item to trash');
+        }
+
+        return response.json();
+    },
+
+    async restoreFile(fileId: string): Promise<{ message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/files/restore`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+            body: JSON.stringify({ file_id: fileId }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Failed to restore item from trash');
+        }
+
+        return response.json();
+    },
+
+    async emptyTrash(): Promise<{ message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/files/trash/empty`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Failed to empty trash');
+        }
+
+        return response.json();
+    },
+
+    async deleteForever(fileId: string): Promise<{ message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/files/delete`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+            body: JSON.stringify({ file_id: fileId }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Failed to permanently delete item');
+        }
+
+        return response.json();
+    },
+
+    async getStorageAnalytics(): Promise<any> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/files/analytics`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to fetch storage analytics');
         }
 
         return response.json();

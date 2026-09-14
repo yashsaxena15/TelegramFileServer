@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException, File, UploadFile
 from pydantic import BaseModel
 from bson import ObjectId
 import os
+import asyncio
 import datetime
 import aiofiles
 import re
@@ -14,6 +15,7 @@ from collections import defaultdict
 from dataclasses import asdict
 
 from ..security.credentials import require_auth, User
+from .folders_routes import validate_folder_name
 from src.Database import database
 from d4rk.Logs import setup_logger
 
@@ -31,6 +33,7 @@ _auth_tokens = {}
 @router.get("")
 @router.get("/")
 async def get_all_files_route(
+    request: Request,
     path: str = Query(default="/", description="Folder path to fetch files from"),
     user: User = Depends(require_auth)
 ):
@@ -39,6 +42,35 @@ async def get_all_files_route(
         logger.info(f"Fetching files for path {path} and user {user}")
         # Use the user's Telegram ID as the user identifier
         user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+
+        # Fast non-blocking catchup check if user is accessing Telegram Inbox
+        if path in ["inbox", "/inbox", "Telegram Inbox", "/Telegram Inbox", "/Home/Telegram Inbox"]:
+            try:
+                bot_manager = getattr(request.app.state, 'bot_manager', None)
+                if bot_manager:
+                    client = bot_manager.get_least_busy_client() if hasattr(bot_manager, 'get_least_busy_client') else None
+                    if not client and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+                        client = bot_manager.client_list[0]
+                    if client:
+                        user_doc = database.Users.find_one({
+                            "$or": [
+                                {"telegram_user_id": user.telegram_user_id},
+                                {"username": user.username}
+                            ]
+                        }) if hasattr(database, 'Users') else None
+                        chat_id = user_doc.get("index_chat_id") if user_doc else None
+                        if chat_id:
+                            from src.Telegram.Plugins._channel_listener import catchup_channel_inbox
+                            # Max 1.2s timeout so the UI request remains instantaneous
+                            await asyncio.wait_for(
+                                catchup_channel_inbox(client, chat_id, user_id, max_lookahead=100),
+                                timeout=1.2
+                            )
+            except asyncio.TimeoutError:
+                logger.info("[FILES_ROUTE] Inbox catchup timed out after 1.2s; loading existing files")
+            except Exception as sync_err:
+                logger.warning(f"[FILES_ROUTE] Inbox catchup error: {sync_err}")
+
         files_data = database.Files.get_files_by_path(path, user_id)
         files_list = []
         for f in files_data:
@@ -66,6 +98,13 @@ class DeleteFileRequest(BaseModel):
 class RenameFileRequest(BaseModel):
     file_id: str
     new_name: str
+
+class StarRequest(BaseModel):
+    file_id: str
+    starred: Optional[bool] = None
+
+class TrashRequest(BaseModel):
+    file_id: str
 
 @router.post("/move")
 async def move_file_route(request: MoveFileRequest, user: User = Depends(require_auth)):
@@ -130,13 +169,30 @@ async def rename_file_route(request: RenameFileRequest, user: User = Depends(req
     try:
         # Use the user's Telegram ID as the user identifier
         user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        
+        # Check item existence and type for validation
+        item_doc = database.Files.find_one({"_id": ObjectId(request.file_id)})
+        if not item_doc:
+            raise HTTPException(status_code=404, detail="File or folder not found")
+
+        if item_doc.get("file_type") == "folder":
+            validated_name = validate_folder_name(request.new_name)
+        else:
+            if any(c in request.new_name for c in ['/', '\\']):
+                raise HTTPException(status_code=400, detail="Filename cannot contain '/' or '\\'")
+            validated_name = request.new_name.strip()
+            if not validated_name:
+                raise HTTPException(status_code=400, detail="Filename cannot be empty")
+
         # Rename the file/folder with owner validation
-        success = database.Files.rename_file(request.file_id, request.new_name, user_id)
+        success = database.Files.rename_file(request.file_id, validated_name, user_id)
         
         if success:
             return {"message": "Item renamed successfully"}
         else:
             raise HTTPException(status_code=404, detail="File not found")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error renaming file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -177,18 +233,32 @@ async def delete_file_route(
 
         # Check if this is a folder
         if file_data.get("file_type") == "folder":
-            # For folders, we also need to delete all files inside the folder
-            folder_path = file_data.get("file_path", "/")
-            folder_name = file_data.get("file_name", "")
+            folder_path = (file_data.get("file_path") or "/Home").strip()
+            folder_name = (file_data.get("file_name") or "").strip()
             
-            # Construct the full folder paths (handle both /Home and /)
-            paths_to_delete = []
-            if folder_path in ["/", "/Home", "Home"]:
-                paths_to_delete.extend([f"/Home/{folder_name}", f"/{folder_name}"])
+            # ABSOLUTE SAFETY GUARD: Never allow deleting root Home or system folders
+            if folder_name.lower() in ["home", "root", "trash", "starred"] and folder_path in ["/", "/Home", "Home", ""]:
+                raise HTTPException(status_code=400, detail="Root folder cannot be deleted.")
+            
+            # Construct the exact folder path safely
+            if folder_path in ["/", ""]:
+                exact_path = f"/Home/{folder_name}"
+            elif folder_path.startswith("/Home"):
+                exact_path = f"{folder_path.rstrip('/')}/{folder_name}"
             else:
-                paths_to_delete.append(f"{folder_path}/{folder_name}")
+                exact_path = f"/Home/{folder_path.strip('/')}/{folder_name}"
+            
+            # Additional safety guard: If exact_path resolves to root, reject
+            if exact_path in ["/", "/Home", "Home", ""]:
+                raise HTTPException(status_code=400, detail="Cannot delete root path.")
+            
+            paths_to_delete = [exact_path]
             
             for f_path in paths_to_delete:
+                # Double-check: ensure f_path is not root
+                if f_path in ["/", "/Home", "Home", ""]:
+                    continue
+                    
                 # Find all files inside to collect their Telegram messages before deleting from DB
                 sub_files = database.Files.find({
                     "$or": [
@@ -245,6 +315,103 @@ async def delete_file_route(
     except Exception as e:
         logger.error(f"Error deleting file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/star")
+async def star_file_route(request: StarRequest, user: User = Depends(require_auth)):
+    try:
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        new_starred = database.Files.toggle_star(request.file_id, user_id, request.starred)
+        return {"starred": new_starred, "message": "Updated star status"}
+    except Exception as e:
+        logger.error(f"Error toggling star: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trash")
+async def trash_file_route(request: TrashRequest, user: User = Depends(require_auth)):
+    try:
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        success = database.Files.move_to_trash(request.file_id, user_id)
+        if success:
+            return {"message": "Moved to trash successfully"}
+        raise HTTPException(status_code=404, detail="File or folder not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error moving to trash: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/restore")
+async def restore_file_route(request: TrashRequest, user: User = Depends(require_auth)):
+    try:
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        success = database.Files.restore_from_trash(request.file_id, user_id)
+        if success:
+            return {"message": "Restored from trash successfully"}
+        raise HTTPException(status_code=404, detail="File or folder not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring from trash: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trash/empty")
+async def empty_trash_route(http_request: Request, user: User = Depends(require_auth)):
+    try:
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        trashed_items = list(database.Files.find({"trashed": True, "owner_id": user_id}))
+        
+        messages_to_delete = defaultdict(set)
+        for doc in trashed_items:
+            c_id = doc.get("chat_id")
+            m_id = doc.get("message_id")
+            if c_id and m_id:
+                messages_to_delete[c_id].add(m_id)
+            if doc.get("is_split"):
+                for part in doc.get("parts", []):
+                    p_mid = part.get("message_id")
+                    if p_mid and c_id:
+                        messages_to_delete[c_id].add(p_mid)
+        
+        database.Files.delete_many({"trashed": True, "owner_id": user_id})
+        
+        if messages_to_delete:
+            try:
+                bot_manager = getattr(http_request.app.state, 'bot_manager', None)
+                client: Optional[Client] = bot_manager.get_least_busy_client() if (bot_manager and hasattr(bot_manager, 'get_least_busy_client')) else None
+                if not client and bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+                    client = bot_manager.client_list[0]
+                if client:
+                    for c_id, m_ids in messages_to_delete.items():
+                        m_list = list(m_ids)
+                        for i in range(0, len(m_list), 100):
+                            batch = m_list[i:i+100]
+                            try:
+                                await client.delete_messages(chat_id=c_id, message_ids=batch)
+                            except Exception as tg_err:
+                                logger.warning(f"Failed deleting Telegram trash batch: {tg_err}")
+            except Exception as ex:
+                logger.warning(f"Error accessing bot client for trash deletion: {ex}")
+                
+        return {"message": f"Emptied {len(trashed_items)} items from trash"}
+    except Exception as e:
+        logger.error(f"Error emptying trash: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/analytics")
+async def get_storage_analytics_route(user: User = Depends(require_auth)):
+    try:
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
+        stats = database.Files.get_storage_analytics(user_id)
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting storage analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # Add file upload endpoint
 @router.post("/upload")
@@ -389,7 +556,7 @@ async def upload_file(
             try:
                 if file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'] and total_written <= 10 * 1024 * 1024:
                     sent_message = await client.send_photo(chat_id=chat_id, photo=current_part_file, caption=f"Uploaded file: {file.filename}")
-                elif file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm']:
+                elif file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']:
                     sent_message = await client.send_video(chat_id=chat_id, video=current_part_file, caption=f"Uploaded file: {file.filename}")
                 elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
                     sent_message = await client.send_audio(chat_id=chat_id, audio=current_part_file, caption=f"Uploaded file: {file.filename}")
@@ -525,6 +692,15 @@ async def init_chunked_upload(
     if not user.telegram_user_id:
         raise HTTPException(status_code=400, detail="TELEGRAM_NOT_VERIFIED: Please verify your Telegram account before uploading files")
 
+    # Clean up old upload sessions (> 2 hours old)
+    now = datetime.datetime.utcnow()
+    expired_uids = [
+        uid for uid, s in list(_active_upload_sessions.items())
+        if (now - datetime.datetime.fromisoformat(s.get("created_at", now.isoformat()))).total_seconds() > 7200
+    ]
+    for uid in expired_uids:
+        _active_upload_sessions.pop(uid, None)
+
     upload_id = secrets.token_hex(12)
     tg_files_dir = os.path.join(os.getcwd(), "tg_files", f"chunk_{upload_id}")
     os.makedirs(tg_files_dir, exist_ok=True)
@@ -619,6 +795,151 @@ async def upload_file_chunk(
         "parts_uploaded": len(session["parts"])
     }
 
+async def _process_upload_completion(upload_id: str, session: dict, bot_manager, chat_id: int):
+    try:
+        session["status"] = "processing"
+        client = bot_manager.get_least_busy_client() if bot_manager else None
+        if not client:
+            session["status"] = "error"
+            session["error"] = "Telegram bot client not available"
+            return
+
+        part_idx = session["current_part_index"]
+        part_file_path = os.path.join(session["dir"], f"part_{part_idx}.tmp")
+
+        file_extension = os.path.splitext(session["filename"])[1].lower()
+        file_type = "document"
+        if file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv']:
+            file_type = "video"
+        elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
+            file_type = "audio"
+        elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+            file_type = "photo"
+
+        if len(session["parts"]) == 0:
+            if not os.path.exists(part_file_path):
+                session["status"] = "error"
+                session["error"] = "No file chunks received"
+                return
+
+            logger.info(f"Uploading file '{session['filename']}' ({session['total_written']} bytes) to Telegram chat {chat_id}...")
+            try:
+                if file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'] and session["total_written"] <= 10 * 1024 * 1024:
+                    sent_msg = await client.send_photo(chat_id=chat_id, photo=part_file_path, caption=f"Uploaded file: {session['filename']}")
+                elif file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']:
+                    sent_msg = await client.send_video(chat_id=chat_id, video=part_file_path, caption=f"Uploaded file: {session['filename']}")
+                elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
+                    sent_msg = await client.send_audio(chat_id=chat_id, audio=part_file_path, caption=f"Uploaded file: {session['filename']}")
+                else:
+                    sent_msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=f"Uploaded file: {session['filename']}", force_document=True)
+            except Exception as ex:
+                logger.warning(f"Fallback upload as document: {ex}")
+                sent_msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=f"Uploaded file: {session['filename']}", force_document=True)
+            finally:
+                if os.path.exists(part_file_path):
+                    os.remove(part_file_path)
+
+            media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo or sent_msg.voice
+            thumbnail = None
+            if hasattr(media, 'thumbs') and media.thumbs:
+                thumbnail = media.thumbs[0].file_id
+            elif hasattr(media, 'file_id') and sent_msg.photo:
+                thumbnail = media.file_id
+
+            database.Files.add_file(
+                chat_id=chat_id,
+                message_id=sent_msg.id,
+                thumbnail=thumbnail,
+                file_type=file_type,
+                file_unique_id=media.file_unique_id,
+                file_size=session["total_written"],
+                file_name=session["filename"],
+                file_caption=f"Uploaded file: {session['filename']}",
+                file_path=session["path"],
+                owner_id=session["user_id"]
+            )
+
+            shutil.rmtree(session["dir"], ignore_errors=True)
+
+            session["status"] = "completed"
+            session["result_file"] = {
+                "id": str(sent_msg.id),
+                "file_unique_id": media.file_unique_id,
+                "file_name": session["filename"],
+                "file_path": session["path"],
+                "file_type": file_type,
+                "file_size": session["total_written"],
+                "thumbnail": thumbnail,
+                "modified": datetime.datetime.now().isoformat()
+            }
+            session["result_message"] = "File uploaded successfully"
+            logger.info(f"Chunked upload {upload_id} for '{session['filename']}' completed successfully.")
+        else:
+            if os.path.exists(part_file_path) and session["current_part_written"] > 0:
+                logger.info(f"Uploading final part {part_idx} ({session['current_part_written']} bytes)...")
+                sent_msg = await client.send_document(
+                    chat_id=chat_id,
+                    document=part_file_path,
+                    caption=f"{session['filename']} (Part {part_idx}/{part_idx})",
+                    force_document=True
+                )
+                media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo
+                if not session["first_thumbnail"] and hasattr(media, 'thumbs') and media.thumbs:
+                    session["first_thumbnail"] = media.thumbs[0].file_id
+                if not session["first_unique_id"] and hasattr(media, 'file_unique_id'):
+                    session["first_unique_id"] = media.file_unique_id
+
+                session["parts"].append({
+                    "part_index": part_idx,
+                    "chat_id": chat_id,
+                    "message_id": sent_msg.id,
+                    "file_unique_id": media.file_unique_id,
+                    "part_size": session["current_part_written"],
+                    "start_byte": session["total_written"] - session["current_part_written"],
+                    "end_byte": session["total_written"] - 1
+                })
+                if os.path.exists(part_file_path):
+                    os.remove(part_file_path)
+
+            final_unique_id = session["first_unique_id"] or f"mp_{upload_id}"
+            database.Files.add_multipart_file(
+                chat_id=chat_id,
+                thumbnail=session["first_thumbnail"],
+                file_type=file_type,
+                file_unique_id=final_unique_id,
+                file_size=session["total_written"],
+                file_name=session["filename"],
+                file_caption=f"Uploaded multi-part file: {session['filename']}",
+                parts=session["parts"],
+                file_path=session["path"],
+                owner_id=session["user_id"],
+                part_size=1950 * 1024 * 1024
+            )
+
+            shutil.rmtree(session["dir"], ignore_errors=True)
+
+            session["status"] = "completed"
+            session["result_file"] = {
+                "id": str(session["parts"][0]["message_id"]),
+                "file_unique_id": final_unique_id,
+                "file_name": session["filename"],
+                "file_path": session["path"],
+                "file_type": file_type,
+                "file_size": session["total_written"],
+                "thumbnail": session["first_thumbnail"],
+                "is_split": True,
+                "total_parts": len(session["parts"]),
+                "modified": datetime.datetime.now().isoformat()
+            }
+            session["result_message"] = f"Multi-part file uploaded successfully ({len(session['parts'])} parts)"
+            logger.info(f"Chunked multi-part upload {upload_id} for '{session['filename']}' completed successfully.")
+    except Exception as e:
+        logger.error(f"Error processing upload completion {upload_id}: {e}", exc_info=True)
+        session["status"] = "error"
+        session["error"] = str(e)
+        if os.path.exists(session.get("dir", "")):
+            shutil.rmtree(session["dir"], ignore_errors=True)
+
 @router.post("/upload/complete")
 async def complete_chunked_upload(
     request: Request,
@@ -637,133 +958,53 @@ async def complete_chunked_upload(
     if not chat_id or not client:
         raise HTTPException(status_code=500, detail="Telegram chat or bot client not available")
 
-    part_idx = session["current_part_index"]
-    part_file_path = os.path.join(session["dir"], f"part_{part_idx}.tmp")
-
-    file_extension = os.path.splitext(session["filename"])[1].lower()
-    file_type = "document"
-    if file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm']:
-        file_type = "video"
-    elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
-        file_type = "audio"
-    elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
-        file_type = "photo"
-
-    if len(session["parts"]) == 0:
-        if not os.path.exists(part_file_path):
-            raise HTTPException(status_code=400, detail="No file chunks received")
-
-        try:
-            if file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'] and session["total_written"] <= 10 * 1024 * 1024:
-                sent_msg = await client.send_photo(chat_id=chat_id, photo=part_file_path, caption=f"Uploaded file: {session['filename']}")
-            elif file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm']:
-                sent_msg = await client.send_video(chat_id=chat_id, video=part_file_path, caption=f"Uploaded file: {session['filename']}")
-            elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
-                sent_msg = await client.send_audio(chat_id=chat_id, audio=part_file_path, caption=f"Uploaded file: {session['filename']}")
-            else:
-                sent_msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=f"Uploaded file: {session['filename']}", force_document=True)
-        except Exception as ex:
-            logger.warning(f"Fallback upload as document: {ex}")
-            sent_msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=f"Uploaded file: {session['filename']}", force_document=True)
-        finally:
-            if os.path.exists(part_file_path):
-                os.remove(part_file_path)
-
-        media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo or sent_msg.voice
-        thumbnail = None
-        if hasattr(media, 'thumbs') and media.thumbs:
-            thumbnail = media.thumbs[0].file_id
-        elif hasattr(media, 'file_id') and sent_msg.photo:
-            thumbnail = media.file_id
-
-        database.Files.add_file(
-            chat_id=chat_id,
-            message_id=sent_msg.id,
-            thumbnail=thumbnail,
-            file_type=file_type,
-            file_unique_id=media.file_unique_id,
-            file_size=session["total_written"],
-            file_name=session["filename"],
-            file_caption=f"Uploaded file: {session['filename']}",
-            file_path=session["path"],
-            owner_id=session["user_id"]
-        )
-
-        shutil.rmtree(session["dir"], ignore_errors=True)
-        _active_upload_sessions.pop(upload_id, None)
-
+    # If already processing or completed, return current status immediately
+    if session.get("status") in ["processing", "completed"]:
         return {
-            "message": "File uploaded successfully",
-            "file": {
-                "id": str(sent_msg.id),
-                "file_unique_id": media.file_unique_id,
-                "file_name": session["filename"],
-                "file_path": session["path"],
-                "file_type": file_type,
-                "file_size": session["total_written"],
-                "thumbnail": thumbnail,
-                "modified": datetime.datetime.now().isoformat()
-            }
+            "status": session["status"],
+            "upload_id": upload_id,
+            "message": "Upload is already processing or completed"
+        }
+
+    session["status"] = "processing"
+    # Run Telegram upload in background task so HTTP connection responds immediately
+    asyncio.create_task(_process_upload_completion(upload_id, session, bot_manager, chat_id))
+
+    return {
+        "status": "processing",
+        "upload_id": upload_id,
+        "message": "File received. Processing and saving to Telegram cloud..."
+    }
+
+@router.get("/upload/status/{upload_id}")
+async def get_upload_status(
+    upload_id: str,
+    user: User = Depends(require_auth)
+):
+    session = _active_upload_sessions.get(upload_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found or expired")
+
+    if session.get("user_id") != str(user.telegram_user_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    status = session.get("status", "uploading")
+    if status == "completed":
+        return {
+            "status": "completed",
+            "file": session.get("result_file"),
+            "message": session.get("result_message", "File uploaded successfully")
+        }
+    elif status == "error":
+        err_msg = session.get("error", "Upload processing failed")
+        return {
+            "status": "error",
+            "error": err_msg
         }
     else:
-        if os.path.exists(part_file_path) and session["current_part_written"] > 0:
-            logger.info(f"Uploading final part {part_idx} ({session['current_part_written']} bytes)...")
-            sent_msg = await client.send_document(
-                chat_id=chat_id,
-                document=part_file_path,
-                caption=f"{session['filename']} (Part {part_idx}/{part_idx})",
-                force_document=True
-            )
-            media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo
-            if not session["first_thumbnail"] and hasattr(media, 'thumbs') and media.thumbs:
-                session["first_thumbnail"] = media.thumbs[0].file_id
-            if not session["first_unique_id"] and hasattr(media, 'file_unique_id'):
-                session["first_unique_id"] = media.file_unique_id
-
-            session["parts"].append({
-                "part_index": part_idx,
-                "chat_id": chat_id,
-                "message_id": sent_msg.id,
-                "file_unique_id": media.file_unique_id,
-                "part_size": session["current_part_written"],
-                "start_byte": session["total_written"] - session["current_part_written"],
-                "end_byte": session["total_written"] - 1
-            })
-            if os.path.exists(part_file_path):
-                os.remove(part_file_path)
-
-        final_unique_id = session["first_unique_id"] or f"mp_{upload_id}"
-        database.Files.add_multipart_file(
-            chat_id=chat_id,
-            thumbnail=session["first_thumbnail"],
-            file_type=file_type,
-            file_unique_id=final_unique_id,
-            file_size=session["total_written"],
-            file_name=session["filename"],
-            file_caption=f"Uploaded multi-part file: {session['filename']}",
-            parts=session["parts"],
-            file_path=session["path"],
-            owner_id=session["user_id"],
-            part_size=1950 * 1024 * 1024
-        )
-
-        shutil.rmtree(session["dir"], ignore_errors=True)
-        _active_upload_sessions.pop(upload_id, None)
-
         return {
-            "message": f"Multi-part file uploaded successfully ({len(session['parts'])} parts)",
-            "file": {
-                "id": str(session["parts"][0]["message_id"]),
-                "file_unique_id": final_unique_id,
-                "file_name": session["filename"],
-                "file_path": session["path"],
-                "file_type": file_type,
-                "file_size": session["total_written"],
-                "thumbnail": session["first_thumbnail"],
-                "is_split": True,
-                "total_parts": len(session["parts"]),
-                "modified": datetime.datetime.now().isoformat()
-            }
+            "status": "processing",
+            "message": "Saving to Telegram cloud..."
         }
 
 @router.get("/thumbnail/{file_id}")

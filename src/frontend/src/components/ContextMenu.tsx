@@ -13,9 +13,10 @@ import {
   Eye,
   FileText,
   Star,
-  Archive,
   RefreshCw,
   Upload,
+  RotateCcw,
+  Archive,
 } from "lucide-react";
 
 interface ContextMenuProps {
@@ -43,6 +44,10 @@ interface ContextMenuProps {
   onCompress?: () => void; // Compress to ZIP
   isArchive?: boolean; // Is current item a zip/archive?
   selectedCount?: number; // Number of selected items
+  isStarred?: boolean;
+  onToggleStar?: () => void;
+  isTrashMode?: boolean;
+  onRestore?: () => void;
 }
 
 interface MenuItem {
@@ -80,6 +85,10 @@ export const ContextMenu = ({
   onCompress,
   isArchive = false,
   selectedCount = 1,
+  isStarred = false,
+  onToggleStar,
+  isTrashMode = false,
+  onRestore,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
@@ -116,6 +125,14 @@ export const ContextMenu = ({
     switch (action) {
       case "open":
         onOpen?.();
+        onClose();
+        break;
+      case "toggle_star":
+        onToggleStar?.();
+        onClose();
+        break;
+      case "restore":
+        onRestore?.();
         onClose();
         break;
       case "rename":
@@ -175,113 +192,150 @@ export const ContextMenu = ({
     }
   };
 
-  const menuItems: MenuItem[] = itemType === "empty"
-    ? [
-      // Empty area context menu
-      {
-        icon: FolderOpen,
-        label: "New Folder",
-        action: "new_folder",
-      },
-      { divider: true, label: "", action: "" },
-      {
-        icon: Clipboard,
-        label: "Paste",
-        action: "paste",
-        shortcut: "Ctrl+V",
-      },
-      { divider: true, label: "", action: "" },
-      {
-        icon: RefreshCw,
-        label: "Refresh",
-        action: "refresh",
-        shortcut: "F5",
-        disabled: true,
-      },
-    ]
-    : [
-      // File/Folder context menu
-      {
-        icon: Eye,
-        label: "Open",
-        action: "open",
-        shortcut: "Enter",
-      },
-      {
-        icon: Download,
-        label: "Download",
-        action: "download",
-      },
-      ...(isArchive
+  const menuItems: MenuItem[] = isTrashMode
+    ? (itemType === "empty"
         ? [
-            { divider: true, label: "", action: "" },
             {
-              icon: Eye,
-              label: "View Archive",
-              action: "inspect_archive",
-            },
-            {
-              icon: Archive,
-              label: "Extract to Cloud",
-              action: "extract_archive",
+              icon: RefreshCw,
+              label: "Refresh",
+              action: "refresh",
+              shortcut: "F5",
+              disabled: true,
             },
           ]
-        : []),
-      { divider: true, label: "", action: "" },
-      {
-        icon: Archive,
-        label: selectedCount > 1 ? `Compress to ZIP (${selectedCount})` : "Compress to ZIP",
-        action: "compress",
-      },
-      { divider: true, label: "", action: "" },
-      {
-        icon: Copy,
-        label: "Copy",
-        action: "copy",
-        shortcut: "Ctrl+C",
-      },
-      {
-        icon: Scissors,
-        label: "Cut",
-        action: "cut",
-        shortcut: "Ctrl+X",
-      },
-      {
-        icon: Clipboard,
-        label: "Paste",
-        action: "paste",
-        shortcut: "Ctrl+V",
-      },
-      { divider: true, label: "", action: "" },
-      {
-        icon: Pencil,
-        label: "Rename",
-        action: "rename",
-        shortcut: "F2",
-      },
-      {
-        icon: Share2,
-        label: "Share",
-        action: "share",
-        disabled: true,
-      },
-      { divider: true, label: "", action: "" },
-      {
-        icon: Trash2,
-        label: "Delete",
-        action: "delete",
-        shortcut: "Del",
-        danger: true,
-        disabled: disableDelete, // Use the disableDelete prop
-      },
-      { divider: true, label: "", action: "" },
-      {
-        icon: Info,
-        label: "Properties",
-        action: "properties",
-        shortcut: "Alt+Enter",
-      },
-    ];
+        : [
+            {
+              icon: RotateCcw,
+              label: "Restore",
+              action: "restore",
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Trash2,
+              label: "Delete Forever",
+              action: "delete",
+              danger: true,
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Info,
+              label: "Properties",
+              action: "properties",
+              shortcut: "Alt+Enter",
+            },
+          ])
+    : (itemType === "empty"
+        ? [
+            // Empty area context menu
+            {
+              icon: FolderOpen,
+              label: "New Folder",
+              action: "new_folder",
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Clipboard,
+              label: "Paste",
+              action: "paste",
+              shortcut: "Ctrl+V",
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: RefreshCw,
+              label: "Refresh",
+              action: "refresh",
+              shortcut: "F5",
+              disabled: true,
+            },
+          ]
+        : [
+            // File/Folder context menu
+            {
+              icon: Eye,
+              label: "Open",
+              action: "open",
+              shortcut: "Enter",
+            },
+            {
+              icon: Star,
+              label: isStarred ? "Remove from Starred" : "Add to Starred",
+              action: "toggle_star",
+            },
+            {
+              icon: Download,
+              label: "Download",
+              action: "download",
+            },
+            ...(isArchive
+              ? [
+                  { divider: true, label: "", action: "" },
+                  {
+                    icon: Eye,
+                    label: "View Archive",
+                    action: "inspect_archive",
+                  },
+                  {
+                    icon: Archive,
+                    label: "Extract to Cloud",
+                    action: "extract_archive",
+                  },
+                ]
+              : []),
+            { divider: true, label: "", action: "" },
+            {
+              icon: Archive,
+              label: selectedCount > 1 ? `Compress to ZIP (${selectedCount})` : "Compress to ZIP",
+              action: "compress",
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Copy,
+              label: "Copy",
+              action: "copy",
+              shortcut: "Ctrl+C",
+            },
+            {
+              icon: Scissors,
+              label: "Cut",
+              action: "cut",
+              shortcut: "Ctrl+X",
+            },
+            {
+              icon: Clipboard,
+              label: "Paste",
+              action: "paste",
+              shortcut: "Ctrl+V",
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Pencil,
+              label: "Rename",
+              action: "rename",
+              shortcut: "F2",
+            },
+            {
+              icon: Share2,
+              label: "Share",
+              action: "share",
+              disabled: true,
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Trash2,
+              label: "Move to Trash",
+              action: "delete",
+              shortcut: "Del",
+              danger: true,
+              disabled: disableDelete,
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Info,
+              label: "Properties",
+              action: "properties",
+              shortcut: "Alt+Enter",
+            },
+          ]);
 
   if (isMobile) {
     return (

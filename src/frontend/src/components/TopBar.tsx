@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, ChevronDown, Search, Grid3x3, List, MoreHorizontal, RefreshCw, Download, Menu, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, Grid3x3, List, RefreshCw, X } from "lucide-react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 
@@ -12,9 +12,6 @@ interface TopBarProps {
   onBack: () => void;
   onRefresh: () => void;
   onBreadcrumbClick: (index: number) => void;
-  onPaste?: () => void;
-  onToggleDownloadQueue?: () => void; // Add this prop
-  onToggleSidebar?: () => void; // Add sidebar toggle prop
 }
 
 export const TopBar = ({
@@ -26,9 +23,6 @@ export const TopBar = ({
   onBack,
   onRefresh,
   onBreadcrumbClick,
-  onPaste,
-  onToggleDownloadQueue, // Add this prop
-  onToggleSidebar, // Add sidebar toggle prop
 }: TopBarProps) => {
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
 
@@ -75,18 +69,8 @@ export const TopBar = ({
         </div>
       ) : (
         <div className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2">
+          {/* Navigation controls */}
           <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-            {onToggleSidebar && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onToggleSidebar}
-                className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-                title="Open Menu"
-              >
-                <Menu className="h-4 w-4" />
-              </Button>
-            )}
             <Button
               variant="ghost"
               size="icon"
@@ -116,6 +100,7 @@ export const TopBar = ({
             </Button>
           </div>
 
+          {/* Breadcrumbs */}
           <div 
             className="flex items-center gap-1 flex-1 min-w-0 bg-muted/50 backdrop-blur-sm rounded-lg px-2.5 sm:px-3 py-1.5 text-sm overflow-x-auto no-scrollbar whitespace-nowrap transition-all duration-200 hover:bg-muted/70"
             onContextMenu={(e) => {
@@ -138,6 +123,7 @@ export const TopBar = ({
             ))}
           </div>
 
+          {/* Mobile search trigger */}
           <Button
             variant="ghost"
             size="icon"
@@ -148,8 +134,9 @@ export const TopBar = ({
             <Search className="h-4 w-4 text-muted-foreground" />
           </Button>
 
+          {/* Desktop search bar */}
           <div 
-            className="hidden md:block relative w-64 shrink-0 transition-all duration-200 hover:scale-[1.02]"
+            className="hidden md:block relative w-56 lg:w-64 shrink-0 transition-all duration-200 hover:scale-[1.01]"
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -167,72 +154,30 @@ export const TopBar = ({
               }}
             />
           </div>
+
+          {/* View mode toggle - placed at right side of search bar */}
+          <div className="flex items-center gap-0.5 shrink-0 bg-muted/40 p-0.5 rounded-lg border border-border/40">
+            <Button
+              variant={viewMode === "grid" ? "secondary" : "ghost"}
+              size="icon"
+              onClick={() => onViewModeChange("grid")}
+              className="h-7 w-7 rounded-md transition-all duration-150"
+              title="Grid view"
+            >
+              <Grid3x3 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant={viewMode === "list" ? "secondary" : "ghost"}
+              size="icon"
+              onClick={() => onViewModeChange("list")}
+              className="h-7 w-7 rounded-md transition-all duration-150"
+              title="List view"
+            >
+              <List className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       )}
-
-      <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 border-t border-border/50 overflow-x-auto no-scrollbar gap-2">
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
-            <span>New</span>
-            <ChevronDown className="ml-1 h-3 w-3" />
-          </Button>
-          <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
-            <span>Sort</span>
-            <ChevronDown className="ml-1 h-3 w-3" />
-          </Button>
-          <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
-            <span>View</span>
-            <ChevronDown className="ml-1 h-3 w-3" />
-          </Button>
-          {onPaste && (
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="h-8 text-xs shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-              onClick={onPaste}
-            >
-              Paste
-            </Button>
-          )}
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105">
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-1 shrink-0">
-          {/* Download button - always render but disable if no handler */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              console.log("Download button clicked");
-              onToggleDownloadQueue && onToggleDownloadQueue();
-            }}
-            className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-            title="Download Queue"
-            disabled={!onToggleDownloadQueue}
-          >
-            <Download className="h-4 w-4" />
-          </Button>
-          
-          <Button
-            variant={viewMode === "grid" ? "secondary" : "ghost"}
-            size="icon"
-            onClick={() => onViewModeChange("grid")}
-            className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-          >
-            <Grid3x3 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant={viewMode === "list" ? "secondary" : "ghost"}
-            size="icon"
-            onClick={() => onViewModeChange("list")}
-            className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105"
-          >
-            <List className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
     </div>
   );
 };

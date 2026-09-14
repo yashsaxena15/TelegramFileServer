@@ -14,7 +14,9 @@ services:
     volumes:
       - ./src/frontend/dist:/app/src/frontend/dist
       - ./src/Backend:/app/src/Backend
+      - ./src/Database:/app/src/Database
       - ./src/Config:/app/src/Config
+      - ./src/Telegram:/app/src/Telegram
       - ./.env:/app/.env
     depends_on:
       - mongo

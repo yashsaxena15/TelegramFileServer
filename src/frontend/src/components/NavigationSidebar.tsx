@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Home, FolderOpen, User, Settings, LogOut, Info, Download, Image, FileText, Video, Music, Mic, X } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Home, FolderOpen, User, Settings, LogOut, Info, Download, X, Star, Trash2, HardDrive, Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { motion, AnimatePresence } from "framer-motion";
@@ -70,7 +70,7 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
   }, []);
 
   // List of pages that should keep the navigation sidebar open
-  const pagesWithSidebarOpen = ['/profile', '/settings', '/users'];
+  const pagesWithSidebarOpen = ['/profile', '/settings', '/users', '/storage'];
   
   // Automatically open sidebar when on specific pages
   useEffect(() => {
@@ -97,6 +97,7 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
   };
 
   const baseNavItems = [
+    { name: "Storage & Analytics", path: "/storage", icon: HardDrive },
     { name: "Profile", path: "/profile", icon: User },
     { name: "Settings", path: "/settings", icon: Settings },
     { name: "Downloads", path: "/downloads", icon: Download },
@@ -109,11 +110,9 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
 
   const categoryFilters = [
     { name: "Home", icon: FolderOpen, filter: "all" },
-    { name: "Images", icon: Image, filter: "photo" },
-    { name: "Documents", icon: FileText, filter: "document" },
-    { name: "Videos", icon: Video, filter: "video" },
-    { name: "Audio", icon: Music, filter: "audio" },
-    { name: "Voice Messages", icon: Mic, filter: "voice" },
+    { name: "Telegram Inbox", icon: Inbox, filter: "inbox" },
+    { name: "Starred", icon: Star, filter: "starred" },
+    { name: "Trash", icon: Trash2, filter: "trash" },
   ];
 
   const [currentCategory, setCurrentCategory] = useState<string>("all");
@@ -140,7 +139,11 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
   const navItems = isOwner ? [...baseNavItems, ...ownerNavItems] : baseNavItems;
 
   const handleMenuClick = (item: string, path?: string) => {
-    if (item === "Profile") {
+    if (item === "Storage & Analytics") {
+      const event = new CustomEvent('showStorageAnalytics');
+      window.dispatchEvent(event);
+      navigate("/storage");
+    } else if (item === "Profile") {
       // Dispatch event to show profile in file explorer area
       const event = new CustomEvent('showProfile');
       window.dispatchEvent(event);
@@ -262,6 +265,11 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isOpen, isMobile]);
+
+  // Desktop has the single unified sidebar; NavigationSidebar is only for mobile drawer
+  if (!isMobile) {
+    return null;
+  }
 
   // Add data attribute to identify this sidebar component
   return (

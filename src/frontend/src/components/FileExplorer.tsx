@@ -12,18 +12,29 @@ import { FileGrid } from "./FileGrid";
 import { DeleteDialog } from "./DeleteDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
 import { RenameInput } from "./RenameInput";
-import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { StorageAnalyticsContent } from "./StorageAnalyticsContent";
 import { ProfileContent } from "./ProfileContent";
 import { SettingsContent } from "./SettingsContent";
 import { UserManagementContent } from "./UserManagementContent";
-import { getApiBaseUrl, resetApiBaseUrl, updateApiBaseUrl, fetchWithTimeout } from "@/lib/api";
+import Downloads from "@/pages/Downloads";
+import { getApiBaseUrl, resetApiBaseUrl, updateApiBaseUrl, fetchWithTimeout, api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import logger from "@/lib/logger";
-import { X as XIcon } from "lucide-react";
+import { X as XIcon, Trash2, RotateCcw, AlertCircle } from "lucide-react";
 import DownloadQueue from "./DownloadQueue";
 import { downloadManager } from "@/lib/downloadManager";
 import { motion, AnimatePresence } from "framer-motion";
@@ -68,9 +79,13 @@ export const FileExplorer = () => {
     return ["Home"];
   });
   
-  const [showProfile, setShowProfile] = useState(false); // State to track if profile should be shown
-  const [showSettings, setShowSettings] = useState(false); // State to track if settings should be shown
-  const [showUserManagement, setShowUserManagement] = useState(false); // State to track if user management should be shown
+  const [showProfile, setShowProfile] = useState(() => window.location.pathname === '/profile');
+  const [showSettings, setShowSettings] = useState(() => window.location.pathname === '/settings');
+  const [showUserManagement, setShowUserManagement] = useState(() => window.location.pathname === '/users');
+  const [showStorageAnalytics, setShowStorageAnalytics] = useState(() => window.location.pathname === '/storage');
+  const [showDownloads, setShowDownloads] = useState(() => window.location.pathname === '/downloads');
+  const [emptyTrashDialogOpen, setEmptyTrashDialogOpen] = useState(false); // State to confirm empty trash
+  const [isEmptyingTrash, setIsEmptyingTrash] = useState(false);
   const [showDownloadQueue, setShowDownloadQueue] = useState(false); // State to track if download queue should be shown
   const [autoCloseTimer, setAutoCloseTimer] = useState<NodeJS.Timeout | null>(null); // Timer for auto-closing widget
   const downloadWidgetRef = useRef<HTMLDivElement>(null); // Ref for download widget
@@ -169,29 +184,28 @@ export const FileExplorer = () => {
         }
       }
       
-      // Also check if we should show profile, settings, or user management based on the new location
-      if (window.location.pathname === '/profile') {
-        setShowProfile(true);
-        setShowSettings(false);
-        setShowUserManagement(false);
-      } else if (window.location.pathname === '/settings') {
-        setShowSettings(true);
-        setShowProfile(false);
-        setShowUserManagement(false);
-      } else if (window.location.pathname === '/users') {
-        setShowUserManagement(true);
-        setShowProfile(false);
-        setShowSettings(false);
-      } else {
-        setShowProfile(false);
-        setShowSettings(false);
-        setShowUserManagement(false);
-      }
+      // Also check if we should show profile, settings, user management, storage analytics, or downloads based on the new location
+      const p = window.location.pathname;
+      setShowProfile(p === '/profile');
+      setShowSettings(p === '/settings');
+      setShowUserManagement(p === '/users');
+      setShowStorageAnalytics(p === '/storage');
+      setShowDownloads(p === '/downloads');
     };
     
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Sync view states whenever location.pathname changes
+  useEffect(() => {
+    const p = location.pathname;
+    setShowProfile(p === '/profile');
+    setShowSettings(p === '/settings');
+    setShowUserManagement(p === '/users');
+    setShowStorageAnalytics(p === '/storage');
+    setShowDownloads(p === '/downloads');
+  }, [location.pathname]);
 
   // Log when the component mounts
   useEffect(() => {
@@ -212,18 +226,27 @@ export const FileExplorer = () => {
       setShowProfile(true);
       setShowSettings(false);
       setShowUserManagement(false);
+      setShowStorageAnalytics(false);
     } else if (location.pathname === '/settings') {
       setShowSettings(true);
       setShowProfile(false);
       setShowUserManagement(false);
+      setShowStorageAnalytics(false);
     } else if (location.pathname === '/users') {
       setShowUserManagement(true);
       setShowProfile(false);
       setShowSettings(false);
+      setShowStorageAnalytics(false);
+    } else if (location.pathname === '/storage') {
+      setShowStorageAnalytics(true);
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowUserManagement(false);
     } else {
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
+      setShowStorageAnalytics(false);
     }
   }, [location.pathname]);
 
@@ -233,6 +256,7 @@ export const FileExplorer = () => {
       setShowProfile(true);
       setShowSettings(false);
       setShowUserManagement(false);
+      setShowStorageAnalytics(false);
     };
 
     window.addEventListener('showProfile', handleShowProfile);
@@ -247,6 +271,7 @@ export const FileExplorer = () => {
       setShowSettings(true);
       setShowProfile(false);
       setShowUserManagement(false);
+      setShowStorageAnalytics(false);
     };
 
     window.addEventListener('showSettings', handleShowSettings);
@@ -261,6 +286,7 @@ export const FileExplorer = () => {
       setShowUserManagement(true);
       setShowProfile(false);
       setShowSettings(false);
+      setShowStorageAnalytics(false);
     };
 
     window.addEventListener('showUsers', handleShowUsers);
@@ -269,12 +295,45 @@ export const FileExplorer = () => {
     };
   }, []);
 
-  // Listen for showFiles event (when closing profile/settings/user management)
+  // Listen for showStorageAnalytics event
+  useEffect(() => {
+    const handleShowStorageAnalytics = () => {
+      setShowStorageAnalytics(true);
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowUserManagement(false);
+    };
+
+    window.addEventListener('showStorageAnalytics', handleShowStorageAnalytics);
+    return () => {
+      window.removeEventListener('showStorageAnalytics', handleShowStorageAnalytics);
+    };
+  }, []);
+
+  // Listen for showDownloads event
+  useEffect(() => {
+    const handleShowDownloads = () => {
+      setShowDownloads(true);
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowStorageAnalytics(false);
+    };
+
+    window.addEventListener('showDownloads', handleShowDownloads);
+    return () => {
+      window.removeEventListener('showDownloads', handleShowDownloads);
+    };
+  }, []);
+
+  // Listen for showFiles event (when closing profile/settings/user management/storage/downloads)
   useEffect(() => {
     const handleShowFiles = () => {
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
+      setShowStorageAnalytics(false);
+      setShowDownloads(false);
       
       // Reset currentPath to Home when returning to file view
       setCurrentPath(["Home"]);
@@ -293,10 +352,20 @@ export const FileExplorer = () => {
   // Current folder name (last part of currentPath)
   const currentFolder = currentPath[currentPath.length - 1] || "Home";
 
+  const isTrashMode = selectedFilter === "trash" || currentFolder === "Trash";
+  const isStarredMode = selectedFilter === "starred" || currentFolder === "Starred";
+  const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
+
   // Convert currentPath to API path format
-  const currentApiPath = currentPath.length === 1 && currentPath[0] === "Home"
-      ? "/Home"
-      : `/${currentPath.join('/')}`;
+  const currentApiPath = isTrashMode
+    ? "/trash"
+    : isStarredMode
+    ? "/starred"
+    : isInboxMode
+    ? "/inbox"
+    : currentPath.length === 1 && currentPath[0] === "Home"
+    ? "/Home"
+    : `/${currentPath.join('/')}`;
   const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
   const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
 
@@ -410,11 +479,9 @@ export const FileExplorer = () => {
     // Map filter to folder name
     const folderMap: Record<string, string> = {
       all: "Home",
-      photo: "Images",
-      document: "Documents",
-      video: "Videos",
-      audio: "Audio",
-      voice: "Voice Messages"
+      inbox: "Telegram Inbox",
+      starred: "Starred",
+      trash: "Trash",
     };
     
     const folderName = folderMap[filter] || "Home";
@@ -431,14 +498,18 @@ export const FileExplorer = () => {
     try {
       // Construct the source path correctly
       let sourcePath = "/";
-      if (currentPath.length > 1) {
+      if (isInboxMode) {
+        sourcePath = "/Telegram Inbox";
+      } else if (currentPath.length > 1) {
         // For all folder types, we construct the path consistently
         sourcePath = `/${currentPath.join('/')}`;
       }
       
       // Construct the target path
       let targetPath = "/Home";
-      if (targetFolderName !== "Home") {
+      if (targetFolderName === "Telegram Inbox") {
+        targetPath = "/Telegram Inbox";
+      } else if (targetFolderName !== "Home") {
         // Since folders are now in the database, we can construct the path directly
         targetPath = `/Home/${targetFolderName}`;
       }
@@ -682,34 +753,57 @@ export const FileExplorer = () => {
 
     try {
       const item = deleteDialog.item;
-      const backendPath = currentApiPath;
-      
-      const baseUrl = getApiBaseUrl();
-      // For the default case, we need to append /api to the base URL
-      const apiUrl = baseUrl ? `${baseUrl}` : '';
-      
-      const response = await fetchWithTimeout(`${apiUrl}/files/delete`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include", // Add this to include cookies for authentication
-        body: JSON.stringify({
-          file_id: item.id,  // Use file_id instead of file_path
-        }),
-      }, 3000); // 3 second timeout
+      if (!item.id) return;
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to delete file");
+      if (isTrashMode) {
+        await api.deleteForever(item.id);
+        toast.success(`Permanently deleted "${item.name}"`);
+      } else {
+        await api.trashFile(item.id);
+        toast.success(`Moved "${item.name}" to Trash`);
       }
-
-      toast.success(`Deleted "${item.name}"`);
       setDeleteDialog(null);
       // Refresh current location after deleting file
       refetch();
     } catch (error: any) {
-      toast.error(error.message || "Failed to delete file");
+      toast.error(error.message || "Failed to delete item");
+    }
+  };
+
+  const handleToggleStar = async (item: FileItem) => {
+    if (!item.id) return;
+    try {
+      const newStarred = !item.starred;
+      await api.toggleStar(item.id, newStarred);
+      toast.success(newStarred ? `Added "${item.name}" to Starred` : `Removed "${item.name}" from Starred`);
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to update star status");
+    }
+  };
+
+  const handleRestoreItem = async (item: FileItem) => {
+    if (!item.id) return;
+    try {
+      await api.restoreFile(item.id);
+      toast.success(`Restored "${item.name}"`);
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to restore item");
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    try {
+      setIsEmptyingTrash(true);
+      const res = await api.emptyTrash();
+      toast.success(res.message || "Trash emptied successfully");
+      setEmptyTrashDialogOpen(false);
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to empty trash");
+    } finally {
+      setIsEmptyingTrash(false);
     }
   };
 
@@ -722,11 +816,9 @@ export const FileExplorer = () => {
     // Map folder name to filter
     const folderMap: Record<string, string> = {
       "Home": "all",
-      "Images": "photo",
-      "Documents": "document",
-      "Videos": "video",
-      "Audio": "audio",
-      "Voice Messages": "voice"
+      "Telegram Inbox": "inbox",
+      "Starred": "starred",
+      "Trash": "trash",
     };
     
     // If we're in a default folder, select the corresponding filter
@@ -750,12 +842,69 @@ export const FileExplorer = () => {
         setShowProfile(false);
         setShowSettings(false);
         setShowUserManagement(false);
+        setShowStorageAnalytics(false);
         handleFilterChange(e.detail.filter);
       }
     };
     window.addEventListener('changeCategory', handleCategoryChange as EventListener);
     return () => window.removeEventListener('changeCategory', handleCategoryChange as EventListener);
   }, []);
+
+  const activeView: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'downloads' = 
+    showProfile ? 'profile' :
+    showSettings ? 'settings' :
+    showUserManagement ? 'users' :
+    showStorageAnalytics ? 'storage' :
+    showDownloads ? 'downloads' : 'files';
+
+  const handleNavigateView = (view: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'downloads', filter?: string) => {
+    if (view === 'profile') {
+      setShowProfile(true);
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowStorageAnalytics(false);
+      setShowDownloads(false);
+      navigate('/profile');
+    } else if (view === 'settings') {
+      setShowSettings(true);
+      setShowProfile(false);
+      setShowUserManagement(false);
+      setShowStorageAnalytics(false);
+      setShowDownloads(false);
+      navigate('/settings');
+    } else if (view === 'users') {
+      setShowUserManagement(true);
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowStorageAnalytics(false);
+      setShowDownloads(false);
+      navigate('/users');
+    } else if (view === 'storage') {
+      setShowStorageAnalytics(true);
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowDownloads(false);
+      navigate('/storage');
+    } else if (view === 'downloads') {
+      setShowDownloads(true);
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowStorageAnalytics(false);
+      navigate('/downloads');
+    } else {
+      setShowProfile(false);
+      setShowSettings(false);
+      setShowUserManagement(false);
+      setShowStorageAnalytics(false);
+      setShowDownloads(false);
+      navigate('/');
+      if (filter) {
+        handleFilterChange(filter);
+      }
+    }
+  };
 
   return (
     <div className="flex h-full w-full bg-background text-foreground select-none min-h-0 overflow-hidden">
@@ -765,6 +914,8 @@ export const FileExplorer = () => {
         onDrop={handleSidebarDrop}
         files={files}
         selectedFilter={selectedFilter}
+        activeView={activeView}
+        onNavigateView={handleNavigateView}
       />
 
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -777,7 +928,10 @@ export const FileExplorer = () => {
             transition={{ duration: 0.3 }}
             className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
           >
-            <ProfileContent onBack={() => setShowProfile(false)} />
+            <ProfileContent onBack={() => {
+              setShowProfile(false);
+              navigate('/');
+            }} />
           </motion.div>
         ) : showSettings ? (
           <motion.div
@@ -788,7 +942,10 @@ export const FileExplorer = () => {
             transition={{ duration: 0.3 }}
             className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
           >
-            <SettingsContent onBack={() => setShowSettings(false)} />
+            <SettingsContent onBack={() => {
+              setShowSettings(false);
+              navigate('/');
+            }} />
           </motion.div>
         ) : showUserManagement ? (
           <motion.div
@@ -801,10 +958,40 @@ export const FileExplorer = () => {
           >
             <UserManagementContent onBack={() => {
               setShowUserManagement(false);
-              // Dispatch event to show files
-              const event = new CustomEvent('showFiles');
-              window.dispatchEvent(event);
+              navigate('/');
             }} />
+          </motion.div>
+        ) : showStorageAnalytics ? (
+          <motion.div
+            key="storage-analytics"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.3 }}
+            className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
+          >
+            <StorageAnalyticsContent
+              onBack={() => {
+                setShowStorageAnalytics(false);
+                navigate('/');
+              }}
+              onOpenTrash={() => {
+                setShowStorageAnalytics(false);
+                navigate('/');
+                handleFilterChange("trash");
+              }}
+            />
+          </motion.div>
+        ) : showDownloads ? (
+          <motion.div
+            key="downloads"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.3 }}
+            className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
+          >
+            <Downloads />
           </motion.div>
         ) : (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -817,14 +1004,28 @@ export const FileExplorer = () => {
               onBack={() => window.history.back()}
               onRefresh={refetch}
               onBreadcrumbClick={handleBreadcrumbClick}
-              onPaste={hasClipboard && !isClipboardPasted() ? handlePaste : undefined}
-              onToggleDownloadQueue={() => setShowDownloadQueue(!showDownloadQueue)} // Add this prop
-              onToggleSidebar={() => {
-                // Dispatch event to toggle sidebar
-                const event = new CustomEvent('toggleNavigationSidebar');
-                window.dispatchEvent(event);
-              }}
             />
+
+            {/* Trash Banner */}
+            {isTrashMode && (
+              <div className="flex items-center justify-between px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-sm">
+                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span>Items in Trash are kept until emptied or permanently deleted.</span>
+                </div>
+                {filteredItems.length > 0 && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setEmptyTrashDialogOpen(true)}
+                    className="h-7 text-xs font-medium px-3 gap-1.5 shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Empty Trash
+                  </Button>
+                )}
+              </div>
+            )}
 
             <FileGrid
               items={filteredItems}
@@ -850,6 +1051,9 @@ export const FileExplorer = () => {
               hasClipboard={hasClipboard}
               isClipboardPasted={isClipboardPasted()}
               onRefresh={refetch}
+              isTrashMode={isTrashMode}
+              onRestoreItem={handleRestoreItem}
+              onToggleStar={handleToggleStar}
             />
 
           </div>
@@ -873,13 +1077,41 @@ export const FileExplorer = () => {
         </div>
       )}
 
-      <DeleteConfirmDialog
+      <DeleteDialog
         open={!!deleteDialog}
         itemName={deleteDialog?.item.name || ""}
         itemType={deleteDialog?.item.type || "file"}
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
+        isTrashMode={isTrashMode}
       />
+
+      {/* Empty Trash Confirmation Dialog */}
+      <AlertDialog open={emptyTrashDialogOpen} onOpenChange={setEmptyTrashDialogOpen}>
+        <AlertDialogContent className="bg-background/95 backdrop-blur-md border border-border rounded-xl shadow-2xl max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Empty Trash?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to permanently delete all items in the Trash? This will delete all files and messages from Telegram channels permanently. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isEmptyingTrash} onClick={() => setEmptyTrashDialogOpen(false)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isEmptyingTrash}
+              onClick={(e) => {
+                e.preventDefault();
+                handleEmptyTrash();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isEmptyingTrash ? "Emptying..." : "Empty Trash"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <NewFolderDialog
         open={newFolderDialogOpen}
@@ -912,10 +1144,14 @@ export const FileExplorer = () => {
           onPaste={hasClipboard && !isClipboardPasted() ? handlePaste : undefined}
           onDelete={() => contextMenu.item && handleDelete(contextMenu.item, contextMenu.index || 0)}
           onRename={() => contextMenu.item && handleRename(contextMenu.item, contextMenu.index || 0)}
-          onNewFolder={handleNewFolder ? () => handleNewFolder("New Folder") : undefined}
+          onNewFolder={() => setNewFolderDialogOpen(true)}
           onClose={() => setContextMenu(null)}
           isClipboardPasted={isClipboardPasted()} // Pass the clipboard pasted status
           hasClipboard={hasClipboard} // Pass the clipboard status function
+          isStarred={contextMenu.item?.starred}
+          onToggleStar={() => contextMenu.item && handleToggleStar(contextMenu.item)}
+          isTrashMode={isTrashMode}
+          onRestore={() => contextMenu.item && handleRestoreItem(contextMenu.item)}
           disableDelete={
             // Disable delete for specific default folders in Home
             currentPath.length === 1 && 

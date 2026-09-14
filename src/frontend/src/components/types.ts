@@ -13,6 +13,10 @@ export interface FileItem {
   chat_id?: number;
   message_id?: number;
   caption?: string;
+  starred?: boolean;
+  trashed?: boolean;
+  trashed_at?: string;
+  original_path?: string;
 }
 
 export interface ApiFile {
@@ -26,6 +30,10 @@ export interface ApiFile {
   file_name: string | null;
   file_caption: string | null;
   file_path: string;  // Path where file is located
+  starred?: boolean;
+  trashed?: boolean;
+  trashed_at?: string;
+  original_path?: string;
 }
 
 const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'];
@@ -75,5 +83,9 @@ export const apiFileToFileItem = (apiFile: any): FileItem => {
     chat_id: apiFile.chat_id,
     message_id: apiFile.message_id,
     caption: apiFile.file_caption,
+    starred: Boolean(apiFile.starred),
+    trashed: Boolean(apiFile.trashed),
+    trashed_at: apiFile.trashed_at,
+    original_path: apiFile.original_path,
   };
 };

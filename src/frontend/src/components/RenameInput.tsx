@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { Input } from "./ui/input";
+import { toast } from "sonner";
 
 interface RenameInputProps {
   initialName: string;
   onSave: (newName: string) => void;
   onCancel: () => void;
 }
+
+const FORBIDDEN_CHARS_REGEX = /[/\\:*?"<>|\x00-\x1f]/;
 
 export const RenameInput = ({ initialName, onSave, onCancel }: RenameInputProps) => {
   const [value, setValue] = useState(initialName);
@@ -25,11 +28,27 @@ export const RenameInput = ({ initialName, onSave, onCancel }: RenameInputProps)
   }, [initialName]);
 
   const handleSubmit = () => {
-    if (value.trim() && value !== initialName) {
-      onSave(value.trim());
-    } else {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === initialName) {
       onCancel();
+      return;
     }
+    if (trimmed.length > 60) {
+      toast.error("Name cannot exceed 60 characters");
+      onCancel();
+      return;
+    }
+    if (FORBIDDEN_CHARS_REGEX.test(trimmed)) {
+      toast.error('Name cannot contain: / \\ : * ? " < > |');
+      onCancel();
+      return;
+    }
+    if (trimmed === "." || trimmed === "..") {
+      toast.error("Name cannot be '.' or '..'");
+      onCancel();
+      return;
+    }
+    onSave(trimmed);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

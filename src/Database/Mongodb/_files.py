@@ -29,6 +29,10 @@ class FileData:
     total_parts: int = 1
     part_size: int = None
     parts: list = None
+    starred: bool = False
+    trashed: bool = False
+    trashed_at: str = None
+    original_path: str = None
     
 class Files(Collection):
     def __init__(self,collection: Collection) -> None:
@@ -219,8 +223,8 @@ class Files(Collection):
         return True
 
     def get_all_files(self, owner_id: str = None):
-        # Filter by owner_id if provided
-        query = {}
+        # Filter by owner_id if provided (exclude trashed by default)
+        query = {"trashed": {"$ne": True}}
         if owner_id:
             query["owner_id"] = owner_id
         
@@ -241,8 +245,12 @@ class Files(Collection):
             is_split=file.get("is_split", False),
             total_parts=file.get("total_parts", 1),
             part_size=file.get("part_size"),
-            parts=file.get("parts")
-            ) for file in files]
+            parts=file.get("parts"),
+            starred=bool(file.get("starred", False)),
+            trashed=bool(file.get("trashed", False)),
+            trashed_at=file.get("trashed_at"),
+            original_path=file.get("original_path")
+        ) for file in files]
     
     def get_files_by_path(self, path: str = "/", owner_id: str = None):
         """Get files and folders for a specific path"""
@@ -252,20 +260,31 @@ class Files(Collection):
                 base_query["owner_id"] = owner_id
             return base_query
         
+        # Trash path
+        if path in ["trash", "/trash", "/Home/Trash", "Trash", "/Trash"]:
+            query = build_query({"trashed": True})
+            all_items = list(self.find(query))
+        # Starred path
+        elif path in ["starred", "/starred", "/Home/Starred", "Starred", "/Starred"]:
+            query = build_query({"starred": True, "trashed": {"$ne": True}})
+            all_items = list(self.find(query))
+        # Telegram Inbox path
+        elif path in ["inbox", "/inbox", "Telegram Inbox", "/Telegram Inbox", "/Home/Telegram Inbox", "inbox/"]:
+            query = build_query({"file_path": "/Telegram Inbox", "trashed": {"$ne": True}})
+            all_items = list(self.find(query))
         # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
-        if path == "all":
+        elif path == "all":
             # Get all files except folders
-            files_query = build_query({"file_type": {"$ne": "folder"}})
+            files_query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}})
             all_items = list(self.find(files_query))
         # For root path, get files with path="/" and folders with path="/"
-        elif path == "/" or path == "Home" or path == "/Home":
+        elif path in ["/", "Home", "/Home"]:
             # Get root-level files and folders (support both /Home and /)
-            files_query = build_query({"file_path": {"$in": ["/Home", "/"]}})
+            files_query = build_query({"file_path": {"$in": ["/Home", "/"]}, "trashed": {"$ne": True}})
             all_items = list(self.find(files_query))
         else:
             # Get files and folders in the specified folder
-            # For a path like "/TestFolder", we want files where file_path = "/TestFolder"
-            base_query = {"file_path": path}
+            base_query = {"file_path": path, "trashed": {"$ne": True}}
             query = build_query(base_query)
             logger.info(f"Executing file query: {query}")
             all_items = list(self.find(query))
@@ -286,7 +305,11 @@ class Files(Collection):
             is_split=file.get("is_split", False),
             total_parts=file.get("total_parts", 1),
             part_size=file.get("part_size"),
-            parts=file.get("parts")
+            parts=file.get("parts"),
+            starred=bool(file.get("starred", False)),
+            trashed=bool(file.get("trashed", False)),
+            trashed_at=file.get("trashed_at"),
+            original_path=file.get("original_path")
         ) for file in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):
@@ -410,3 +433,215 @@ class Files(Collection):
                 )
         
         return result.modified_count > 0
+
+    def toggle_star(self, file_id: str, owner_id: str = None, starred: bool = None) -> bool:
+        """Toggle or set starred status for a file or folder"""
+        from bson import ObjectId
+        query = {"_id": ObjectId(file_id)}
+        if owner_id:
+            query["owner_id"] = owner_id
+        doc = self.find_one(query)
+        if not doc:
+            return False
+        
+        new_starred = starred if starred is not None else not doc.get("starred", False)
+        self.update_one(query, {"$set": {"starred": new_starred}})
+        return new_starred
+
+    def move_to_trash(self, file_id: str, owner_id: str = None) -> bool:
+        """Soft delete a file or folder into trash"""
+        from bson import ObjectId
+        query = {"_id": ObjectId(file_id)}
+        if owner_id:
+            query["owner_id"] = owner_id
+        doc = self.find_one(query)
+        if not doc:
+            return False
+        
+        now = datetime.utcnow().isoformat()
+        orig_path = doc.get("file_path", "/")
+        self.update_one(query, {
+            "$set": {
+                "trashed": True,
+                "trashed_at": now,
+                "original_path": orig_path
+            }
+        })
+
+        # If it's a folder, also trash all contents
+        if doc.get("file_type") == "folder":
+            folder_name = (doc.get("file_name") or "").strip()
+            # Safety check: Never allow trashing root Home or system folders
+            if folder_name.lower() in ["home", "root", "trash", "starred"] and orig_path in ["/", "/Home", "Home", ""]:
+                return False
+            
+            if orig_path in ["/", ""]:
+                f_full = f"/Home/{folder_name}"
+            elif orig_path.startswith("/Home"):
+                f_full = f"{orig_path.rstrip('/')}/{folder_name}"
+            else:
+                f_full = f"/Home/{orig_path.strip('/')}/{folder_name}"
+            
+            if f_full in ["/", "/Home", "Home", ""]:
+                return False
+            
+            import re
+            content_query = {
+                "$or": [
+                    {"file_path": f_full},
+                    {"file_path": {"$regex": f"^{re.escape(f_full)}/"}}
+                ]
+            }
+            if owner_id:
+                content_query["owner_id"] = owner_id
+            
+            # Store original path and mark trashed
+            self.update_many(content_query, {
+                "$set": {
+                    "trashed": True,
+                    "trashed_at": now
+                }
+            })
+        return True
+
+    def restore_from_trash(self, file_id: str, owner_id: str = None) -> bool:
+        """Restore a file or folder from trash back to active explorer"""
+        from bson import ObjectId
+        query = {"_id": ObjectId(file_id)}
+        if owner_id:
+            query["owner_id"] = owner_id
+        doc = self.find_one(query)
+        if not doc:
+            return False
+        
+        self.update_one(query, {
+            "$set": {"trashed": False},
+            "$unset": {"trashed_at": ""}
+        })
+
+        # If folder, also restore sub-items
+        if doc.get("file_type") == "folder":
+            folder_name = doc.get("file_name", "")
+            orig_path = doc.get("original_path") or doc.get("file_path", "/")
+            if orig_path in ["/", "/Home", "Home"]:
+                f_full = f"/Home/{folder_name}"
+            else:
+                f_full = f"{orig_path.rstrip('/')}/{folder_name}"
+            
+            import re
+            content_query = {
+                "$or": [
+                    {"file_path": f_full},
+                    {"file_path": {"$regex": f"^{re.escape(f_full)}/"}}
+                ]
+            }
+            if owner_id:
+                content_query["owner_id"] = owner_id
+            
+            self.update_many(content_query, {
+                "$set": {"trashed": False},
+                "$unset": {"trashed_at": ""}
+            })
+        return True
+
+    def get_storage_analytics(self, owner_id: str = None) -> dict:
+        """Calculates total storage used, breakdown by categories, total counts, and largest files"""
+        query = {}
+        if owner_id:
+            query["owner_id"] = owner_id
+        
+        all_items = list(self.find(query))
+        
+        total_bytes = 0
+        trash_bytes = 0
+        trash_count = 0
+        starred_count = 0
+        total_files = 0
+        total_folders = 0
+
+        categories = {
+            "video": {"count": 0, "bytes": 0},
+            "audio": {"count": 0, "bytes": 0},
+            "photo": {"count": 0, "bytes": 0},
+            "document": {"count": 0, "bytes": 0},
+            "archive": {"count": 0, "bytes": 0},
+            "other": {"count": 0, "bytes": 0}
+        }
+
+        active_files = []
+
+        archive_exts = {'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso'}
+        video_exts = {'mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'}
+        photo_exts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'}
+        audio_exts = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'wma'}
+        doc_exts = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'xlsm', 'xlsb', 'ppt', 'pptx', 'txt', 'csv', 'tsv', 'ods', 'epub'}
+
+        for item in all_items:
+            is_trashed = bool(item.get("trashed", False))
+            is_starred = bool(item.get("starred", False))
+            f_type = item.get("file_type")
+            f_size = int(item.get("file_size") or 0)
+            f_name = item.get("file_name", "") or ""
+            ext = f_name.split(".")[-1].lower() if "." in f_name else ""
+
+            if is_starred and not is_trashed:
+                starred_count += 1
+
+            if is_trashed:
+                trash_count += 1
+                trash_bytes += f_size
+                continue
+
+            if f_type == "folder":
+                total_folders += 1
+                continue
+
+            total_files += 1
+            total_bytes += f_size
+            active_files.append(item)
+
+            if f_type == "video" or ext in video_exts:
+                categories["video"]["count"] += 1
+                categories["video"]["bytes"] += f_size
+            elif f_type in ["audio", "voice"] or ext in audio_exts:
+                categories["audio"]["count"] += 1
+                categories["audio"]["bytes"] += f_size
+            elif f_type == "photo" or ext in photo_exts:
+                categories["photo"]["count"] += 1
+                categories["photo"]["bytes"] += f_size
+            elif ext in archive_exts:
+                categories["archive"]["count"] += 1
+                categories["archive"]["bytes"] += f_size
+            elif f_type == "document" or ext in doc_exts:
+                categories["document"]["count"] += 1
+                categories["document"]["bytes"] += f_size
+            else:
+                categories["other"]["count"] += 1
+                categories["other"]["bytes"] += f_size
+
+        # Top 10 largest files
+        active_files.sort(key=lambda x: int(x.get("file_size") or 0), reverse=True)
+        largest_files = [
+            {
+                "id": str(f.get("_id")),
+                "file_unique_id": f.get("file_unique_id"),
+                "file_name": f.get("file_name"),
+                "file_size": int(f.get("file_size") or 0),
+                "file_type": f.get("file_type"),
+                "file_path": f.get("file_path"),
+                "thumbnail": f.get("thumbnail"),
+                "modified_date": f.get("modified_date")
+            }
+            for f in active_files[:10]
+        ]
+
+        return {
+            "total_bytes": total_bytes,
+            "total_files": total_files,
+            "total_folders": total_folders,
+            "trash_bytes": trash_bytes,
+            "trash_count": trash_count,
+            "starred_count": starred_count,
+            "by_category": categories,
+            "largest_files": largest_files
+        }
