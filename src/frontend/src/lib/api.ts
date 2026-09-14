@@ -211,7 +211,7 @@ function addAuthHeaders(options: RequestInit = {}): RequestInit {
 }
 
 // Utility function to implement fetch with timeout
-export const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout: number = 3000): Promise<Response> => {
+export const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout: number = 30000): Promise<Response> => {
   // Add auth headers to all requests
   const mergedOptions = addAuthHeaders(options);
   
@@ -263,7 +263,9 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
   // Standard browser fetch with timeout (for non-Tauri environments)
   logger.info('[API] Using standard fetch for request to:', url);
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Request timed out after ${Math.round(timeout / 1000)}s`));
+  }, timeout);
   
   try {
     logger.info('[API] Making fetch request with options:', mergedOptions);
@@ -274,8 +276,12 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
     clearTimeout(timeoutId);
     logger.info('[API] Standard fetch response status:', response.status);
     return response;
-  } catch (error) {
+  } catch (error: any) {
     clearTimeout(timeoutId);
+    if (error?.name === 'AbortError' || error?.message?.toLowerCase().includes('aborted')) {
+      logger.error('[API] Request timed out or was aborted:', { url, timeout });
+      throw new Error(`Request timed out after ${Math.round(timeout / 1000)}s. Please try again.`);
+    }
     logger.error('[API] Standard fetch error:', error);
     throw error;
   }

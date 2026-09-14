@@ -33,8 +33,8 @@ const Index = () => {
   logger.info("Index page rendered");
   return (
     <AuthWrapper>
-      <div className="flex h-screen bg-background select-none">
-        <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex flex-1 h-full w-full bg-background select-none min-h-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {showDownloads ? <Downloads /> : <FileExplorer />}
         </div>
       </div>

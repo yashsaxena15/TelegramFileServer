@@ -157,6 +157,15 @@ All colors MUST be HSL.
 }
 
 /* Custom scrollbar styles */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(215 24% 26%) transparent;
+}
+
+.dark .custom-scrollbar {
+  scrollbar-color: hsl(215 16% 46%) transparent;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 0.5rem;
 }

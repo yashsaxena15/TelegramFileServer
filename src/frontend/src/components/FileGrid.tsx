@@ -5,7 +5,7 @@ import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check,
 import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
-import { MediaPlayer } from "./MediaPlayer";
+import { useMediaPlayer } from "@/contexts/MediaPlayerContext";
 import { Thumbnail } from "./Thumbnail";
 import { DocumentReaderModal } from "./DocumentReaderModal";
 import { ArchiveInspectDialog } from "./ArchiveInspectDialog";
@@ -117,12 +117,7 @@ export const FileGrid = ({
   } | null>(null);
   const [archiveInspect, setArchiveInspect] = useState<{ fileId: string; fileName: string } | null>(null);
   const [compressDialog, setCompressDialog] = useState<boolean>(false);
-  const [mediaPlayer, setMediaPlayer] = useState<{
-    url: string;
-    fileName: string;
-    fileType: "video" | "audio" | "voice";
-    fileItem?: FileItem;
-  } | null>(null);
+  const { playMedia } = useMediaPlayer();
   const [isDragActive, setIsDragActive] = useState(false); // Add drag active state
   const [dropTarget, setDropTarget] = useState<FileItem | null>(null); // Track drop target
   const [uploadingFiles, setUploadingFiles] = useState<File[] | null>(null); // Track uploading files
@@ -409,7 +404,9 @@ export const FileGrid = ({
     const DOC_EXTS = [
       'pdf', 'epub', 'cbz', 'cbr', 'docx', 'md', 'markdown',
       'txt', 'log', 'json', 'py', 'js', 'ts', 'jsx', 'tsx', 'html', 'css',
-      'sh', 'bash', 'yml', 'yaml', 'xml', 'csv', 'sql', 'env', 'ini', 'conf'
+      'sh', 'bash', 'yml', 'yaml', 'xml', 'sql', 'env', 'ini', 'conf',
+      'xlsx', 'xls', 'xlsm', 'xlsb', 'xltx', 'csv', 'tsv', 'ods',
+      'pptx', 'ppt', 'ppsx', 'potx', 'pptm', 'potm'
     ];
     const ARCHIVE_EXTS = ['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z'];
 
@@ -452,7 +449,7 @@ export const FileGrid = ({
       console.log("Opening media in built-in player");
       const mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
       
-      setMediaPlayer({ 
+      playMedia({ 
         url: mediaUrl, 
         fileName: item.name, 
         fileType: isVideo ? "video" : (item.fileType as "audio" | "voice" || "audio"),
@@ -1519,19 +1516,8 @@ export const FileGrid = ({
     directoryInputRef.current?.click();
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-2">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex-1 flex flex-col bg-background select-none" data-drag-container
+    <div className="flex-1 flex flex-col bg-background select-none min-h-0 overflow-hidden" data-drag-container
       onDragOver={handleFileDragOver}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -1597,7 +1583,7 @@ export const FileGrid = ({
       )}
       
       <div
-        className={`flex-1 overflow-y-auto p-4 ${isDragActive ? 'bg-blue-50 border-2 border-dashed border-blue-500 rounded-lg' : ''}`}
+        className={`flex-1 overflow-y-auto overflow-x-hidden p-4 pb-28 sm:pb-20 min-h-0 custom-scrollbar ${isDragActive ? 'bg-blue-50 border-2 border-dashed border-blue-500 rounded-lg' : ''}`}
         onClick={(e) => {
           const target = e.target as HTMLElement;
           if (target === e.currentTarget || target.getAttribute('data-grid-background') === "true") {
@@ -1706,7 +1692,14 @@ export const FileGrid = ({
           </div>
         )}
         
-        {viewMode === "grid" ? (
+        {isLoading ? (
+          <div className="flex-1 flex items-center justify-center min-h-[350px]">
+            <div className="flex flex-col items-center gap-2">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          </div>
+        ) : viewMode === "grid" ? (
           <div 
             data-grid-background="true"
             className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-9 2xl:grid-cols-12 gap-2 sm:gap-1.5"
@@ -2035,6 +2028,7 @@ export const FileGrid = ({
             y={contextMenu.y}
             itemType={contextMenu.itemType}
             itemName={contextMenu.itemName}
+            onOpen={() => contextMenu.item && handleItemOpen(contextMenu.item)}
             onCopy={() => contextMenu.item && onCopy(contextMenu.item)}
             onCut={() => contextMenu.item && onCut(contextMenu.item)}
             onPaste={onPaste}
@@ -2076,7 +2070,7 @@ export const FileGrid = ({
                       file_id: getItemKey(contextMenu.item),
                       target_path: currentApiPath || (currentPath ? `/${currentPath.join('/')}` : "/Home")
                     })
-                  });
+                  }, 600000);
                   if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.detail || `Extraction failed (${res.status})`);
@@ -2110,27 +2104,6 @@ export const FileGrid = ({
           images={imageViewer.images}
           initialIndex={imageViewer.initialIndex}
           onClose={() => setImageViewer(null)}
-        />
-      )}
-
-      {/* Media Player */}
-      {mediaPlayer && (
-        <MediaPlayer
-          mediaUrl={mediaPlayer.url}
-          fileName={mediaPlayer.fileName}
-          fileType={mediaPlayer.fileType}
-          onDownload={() => {
-            if (mediaPlayer.fileItem) {
-              onDownload(mediaPlayer.fileItem);
-            }
-          }}
-          onClose={() => {
-            // Revoke the object URL to free memory
-            if (mediaPlayer.url.startsWith('blob:')) {
-              URL.revokeObjectURL(mediaPlayer.url);
-            }
-            setMediaPlayer(null);
-          }}
         />
       )}
 

@@ -1,6 +1,8 @@
 import os
 import sys
 import math
+import re
+import urllib.parse
 from venv import logger
 import zlib
 import json
@@ -599,7 +601,12 @@ async def media_streamer(
     if not resolved_file_name and "/" in mime_type:
         resolved_file_name = f"{secrets.token_hex(2)}.{mime_type.split('/')[1]}"
 
-    content_disposition = 'inline; filename="{}"'.format(resolved_file_name) if is_watch else 'attachment; filename="{}"'.format(resolved_file_name)
+    encoded_filename = urllib.parse.quote(resolved_file_name)
+    ascii_fallback = re.sub(r'[^\x20-\x7E]', '_', resolved_file_name).replace('"', '_').replace('\\', '_')
+    if not ascii_fallback.strip('_ '):
+        ascii_fallback = f"media_{secrets.token_hex(4)}"
+    disposition_type = "inline" if is_watch else "attachment"
+    content_disposition = f'{disposition_type}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_filename}'
 
     headers = {
         "Content-Type": mime_type,

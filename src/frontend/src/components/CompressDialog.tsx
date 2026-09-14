@@ -52,7 +52,8 @@ export const CompressDialog = ({
             destination_path: currentPath || "/Home",
             zip_name: zipName.trim(),
           }),
-        }
+        },
+        600000
       );
 
       if (!res.ok) {

@@ -24,6 +24,7 @@ interface ContextMenuProps {
   onClose: () => void;
   itemType: "file" | "folder" | "empty";
   itemName: string;
+  onOpen?: () => void;
   onCopy: () => void;
   onCut: () => void;
   onPaste?: () => void;
@@ -60,6 +61,7 @@ export const ContextMenu = ({
   onClose,
   itemType,
   itemName,
+  onOpen,
   onCopy,
   onCut,
   onPaste,
@@ -113,6 +115,7 @@ export const ContextMenu = ({
   const handleAction = async (action: string) => {
     switch (action) {
       case "open":
+        onOpen?.();
         onClose();
         break;
       case "rename":
@@ -214,7 +217,7 @@ export const ContextMenu = ({
             { divider: true, label: "", action: "" },
             {
               icon: Eye,
-              label: "Peek Inside Archive",
+              label: "View Archive",
               action: "inspect_archive",
             },
             {

@@ -51,7 +51,9 @@ export const ArchiveInspectDialog = ({
       try {
         const baseUrl = getApiBaseUrl();
         const res = await fetchWithTimeout(
-          `${baseUrl ? baseUrl : ""}/api/archive/inspect/${encodeURIComponent(fileId)}`
+          `${baseUrl ? baseUrl : ""}/api/archive/inspect/${encodeURIComponent(fileId)}`,
+          {},
+          120000
         );
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -83,7 +85,8 @@ export const ArchiveInspectDialog = ({
             file_id: fileId,
             target_path: currentPath || "/Home",
           }),
-        }
+        },
+        600000
       );
 
       if (!res.ok) {
@@ -126,7 +129,7 @@ export const ArchiveInspectDialog = ({
               </DialogTitle>
               <p className="text-xs text-zinc-400 mt-0.5">
                 {isLoading
-                  ? "Inspecting archive contents..."
+                  ? "Loading archive contents..."
                   : `${files.length} items • Uncompressed: ${formatSize(totalSize)}`}
               </p>
             </div>
@@ -138,7 +141,7 @@ export const ArchiveInspectDialog = ({
           {isLoading ? (
             <div className="h-48 flex flex-col items-center justify-center gap-3 text-zinc-400">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
-              <p className="text-sm">Reading archive index from Telegram...</p>
+              <p className="text-sm">Loading archive contents from Telegram cloud...</p>
             </div>
           ) : error ? (
             <div className="h-48 flex flex-col items-center justify-center gap-3 text-center p-4">

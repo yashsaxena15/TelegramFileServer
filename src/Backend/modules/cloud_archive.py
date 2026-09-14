@@ -36,16 +36,29 @@ async def download_file_to_temp(
     file_size: int,
     byte_streamer: ByteStreamer,
     dest_path: str,
-    active_clients: Optional[List[Client]] = None
+    active_clients: Optional[List[Client]] = None,
+    parts_list: Optional[List[Dict[str, Any]]] = None
 ):
     """Downloads a file from Telegram using ByteStreamer chunks into a local temp file."""
-    parts_to_stream = [{
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "part_from_byte": 0,
-        "part_until_byte": file_size - 1,
-        "part_index": 1
-    }]
+    if parts_list:
+        parts_to_stream = []
+        for p in parts_list:
+            p_size = p.get("part_size", 0)
+            parts_to_stream.append({
+                "chat_id": p.get("chat_id", chat_id),
+                "message_id": p.get("message_id", message_id),
+                "part_from_byte": 0,
+                "part_until_byte": p_size - 1,
+                "part_index": p.get("part_index", 1)
+            })
+    else:
+        parts_to_stream = [{
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "part_from_byte": 0,
+            "part_until_byte": file_size - 1,
+            "part_index": 1
+        }]
 
     with open(dest_path, "wb") as f:
         async for chunk in byte_streamer.yield_parts(parts_to_stream, chunk_size=1024 * 1024, client_list=active_clients):
@@ -58,7 +71,8 @@ async def inspect_archive(
     message_id: int,
     file_size: int,
     byte_streamer: ByteStreamer,
-    active_clients: Optional[List[Client]] = None
+    active_clients: Optional[List[Client]] = None,
+    parts_list: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """
     Inspects the contents of a ZIP file without extracting to Telegram.
@@ -67,7 +81,7 @@ async def inspect_archive(
     temp_zip = os.path.join(TEMP_ARCHIVE_DIR, f"inspect_{uuid.uuid4().hex}.zip")
     try:
         # Download file to temp
-        await download_file_to_temp(chat_id, message_id, file_size, byte_streamer, temp_zip, active_clients)
+        await download_file_to_temp(chat_id, message_id, file_size, byte_streamer, temp_zip, active_clients, parts_list)
         
         if not zipfile.is_zipfile(temp_zip):
             return {"is_valid": False, "error": "Not a valid ZIP archive", "files": []}
@@ -132,8 +146,18 @@ async def extract_archive_in_cloud(
     extracted_folders_count = 0
 
     try:
-        active_clients = bot_manager.active_bots if hasattr(bot_manager, "active_bots") else [bot_manager.client]
-        await download_file_to_temp(chat_id, message_id, file_size, byte_streamer, temp_zip, active_clients)
+        active_clients = [c for c in getattr(bot_manager, 'client_list', []) if getattr(c, 'is_connected', True)]
+        if not active_clients and hasattr(bot_manager, 'get_least_busy_client'):
+            fallback_c = bot_manager.get_least_busy_client()
+            if fallback_c:
+                active_clients = [fallback_c]
+
+        primary_client = bot_manager.get_least_busy_client() if hasattr(bot_manager, 'get_least_busy_client') else None
+        if not primary_client and active_clients:
+            primary_client = active_clients[0]
+
+        parts_list = file_doc.get("parts") if file_doc.get("is_split") else None
+        await download_file_to_temp(chat_id, message_id, file_size, byte_streamer, temp_zip, active_clients, parts_list)
 
         if not zipfile.is_zipfile(temp_zip):
             raise ValueError(f"'{archive_name}' is not a valid ZIP file.")
@@ -142,7 +166,6 @@ async def extract_archive_in_cloud(
             zf.extractall(extract_dir)
 
         # Upload and index extracted structure
-        primary_client = bot_manager.get_least_busy_client() or bot_manager.client
         storage_chat_id = LOGS or MOVIE or chat_id
 
         # Walk extracted directory
@@ -263,15 +286,28 @@ async def compress_items_to_zip(
         clean_dest = "/Home"
 
     temp_zip = os.path.join(TEMP_ARCHIVE_DIR, f"create_{uuid.uuid4().hex}_{zip_name}")
-    active_clients = bot_manager.active_bots if hasattr(bot_manager, "active_bots") else [bot_manager.client]
-    primary_client = bot_manager.get_least_busy_client() or bot_manager.client
+    active_clients = [c for c in getattr(bot_manager, 'client_list', []) if getattr(c, 'is_connected', True)]
+    if not active_clients and hasattr(bot_manager, 'get_least_busy_client'):
+        fallback_c = bot_manager.get_least_busy_client()
+        if fallback_c:
+            active_clients = [fallback_c]
+
+    primary_client = bot_manager.get_least_busy_client() if hasattr(bot_manager, 'get_least_busy_client') else None
+    if not primary_client and active_clients:
+        primary_client = active_clients[0]
 
     # Collect all file documents to compress
     files_to_compress: List[Dict[str, Any]] = []
 
     for item_id in item_ids:
         try:
-            doc = database.Files.find_one({"_id": ObjectId(item_id)})
+            doc = None
+            try:
+                doc = database.Files.find_one({"_id": ObjectId(item_id)})
+            except Exception:
+                pass
+            if not doc:
+                doc = database.Files.find_one({"$or": [{"file_unique_id": item_id}, {"file_name": item_id}]})
             if not doc:
                 continue
 
@@ -313,7 +349,8 @@ async def compress_items_to_zip(
 
                 temp_f = os.path.join(TEMP_ARCHIVE_DIR, f"part_{uuid.uuid4().hex}")
                 try:
-                    await download_file_to_temp(c_id, m_id, f_size, byte_streamer, temp_f, active_clients)
+                    p_list = f_doc.get("parts") if f_doc.get("is_split") else None
+                    await download_file_to_temp(c_id, m_id, f_size, byte_streamer, temp_f, active_clients, p_list)
                     zf.write(temp_f, arcname)
                 finally:
                     if os.path.exists(temp_f):

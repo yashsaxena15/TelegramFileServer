@@ -282,8 +282,11 @@ async def download_folder_zip(
         byte_streamer = ByteStreamer(client)
 
         encoded_filename = urllib.parse.quote(zip_filename)
+        ascii_fallback = re.sub(r'[^\x20-\x7E]', '_', zip_filename).replace('"', '_').replace('\\', '_')
+        if not ascii_fallback.strip('_ '):
+            ascii_fallback = "archive.zip"
         headers = {
-            "Content-Disposition": f'attachment; filename="{zip_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "Content-Disposition": f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_filename}',
             "Content-Type": "application/zip",
             "Cache-Control": "no-cache",
         }

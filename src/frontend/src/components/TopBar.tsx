@@ -34,7 +34,7 @@ export const TopBar = ({
 
   return (
     <div 
-      className="backdrop-blur-md bg-background/70 border-b border-border select-none sticky top-0 z-10"
+      className="backdrop-blur-md bg-background/70 border-b border-border select-none sticky top-0 z-10 shrink-0"
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();

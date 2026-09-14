@@ -40,6 +40,9 @@ async def inspect_archive_endpoint(
         doc = None
 
     if not doc:
+        doc = database.Files.find_one({"$or": [{"file_unique_id": file_id}, {"file_name": file_id}]})
+
+    if not doc:
         raise HTTPException(status_code=404, detail="Archive file not found")
 
     bot_manager = getattr(request.app.state, 'bot_manager', None)
@@ -58,7 +61,8 @@ async def inspect_archive_endpoint(
         message_id=int(doc["message_id"]),
         file_size=int(doc.get("file_size") or 0),
         byte_streamer=byte_streamer,
-        active_clients=active_clients
+        active_clients=active_clients,
+        parts_list=doc.get("parts") if doc.get("is_split") else None
     )
 
     if not result.get("is_valid", False):
@@ -87,6 +91,7 @@ async def compress_archive_endpoint(
 
     byte_streamer = ByteStreamer(client)
 
+    uid = str(user.telegram_user_id) if user.telegram_user_id else user.username
     try:
         result = await compress_items_to_zip(
             item_ids=body.item_ids,
@@ -94,7 +99,7 @@ async def compress_archive_endpoint(
             zip_name=body.zip_name,
             byte_streamer=byte_streamer,
             bot_manager=bot_manager,
-            user_id=str(user.telegram_user_id)
+            user_id=uid
         )
         return result
     except Exception as e:
@@ -115,6 +120,9 @@ async def extract_archive_endpoint(
         doc = None
 
     if not doc:
+        doc = database.Files.find_one({"$or": [{"file_unique_id": body.file_id}, {"file_name": body.file_id}]})
+
+    if not doc:
         raise HTTPException(status_code=404, detail="Archive file not found")
 
     bot_manager = getattr(request.app.state, 'bot_manager', None)
@@ -126,6 +134,7 @@ async def extract_archive_endpoint(
         raise HTTPException(status_code=503, detail="No available bot clients")
 
     byte_streamer = ByteStreamer(client)
+    uid = str(user.telegram_user_id) if user.telegram_user_id else user.username
 
     try:
         result = await extract_archive_in_cloud(
@@ -133,7 +142,7 @@ async def extract_archive_endpoint(
             target_path=body.target_path,
             byte_streamer=byte_streamer,
             bot_manager=bot_manager,
-            user_id=str(user.telegram_user_id)
+            user_id=uid
         )
         return result
     except Exception as e:

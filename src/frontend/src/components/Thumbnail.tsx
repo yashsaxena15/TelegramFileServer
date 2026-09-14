@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { FileItem } from "./types";
-import { FileText, Image as ImageIcon, FileVideo, FileAudio, FileArchive } from "lucide-react";
+import { FileText, Image as ImageIcon, FileVideo, FileAudio, FileArchive, FileSpreadsheet, Presentation } from "lucide-react";
 import { getApiBaseUrl } from "@/lib/api";
 
 interface ThumbnailProps {
@@ -222,8 +222,10 @@ const getDefaultFileIcon = (item: FileItem) => {
         return <FileText className="w-10 h-10 text-red-500" />;
       } else if (['doc', 'docx'].includes(item.extension || '')) {
         return <FileText className="w-10 h-10 text-blue-700" />;
-      } else if (['xls', 'xlsx'].includes(item.extension || '')) {
-        return <FileText className="w-10 h-10 text-green-600" />;
+      } else if (['xls', 'xlsx', 'xlsm', 'xlsb', 'xltx', 'csv', 'tsv', 'ods'].includes(item.extension || '')) {
+        return <FileSpreadsheet className="w-10 h-10 text-emerald-500" />;
+      } else if (['pptx', 'ppt', 'ppsx', 'potx', 'pptm', 'potm'].includes(item.extension || '')) {
+        return <Presentation className="w-10 h-10 text-orange-500" />;
       } else if (['zip', 'rar', '7z'].includes(item.extension || '')) {
         return <FileArchive className="w-10 h-10 text-yellow-500" />;
       }

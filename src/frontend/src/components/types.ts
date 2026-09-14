@@ -42,7 +42,8 @@ export const getFileIcon = (fileType: string, fileName?: string): string => {
   if (fileType === 'audio' || fileType === 'voice' || AUDIO_EXTS.includes(extension)) return '🎵';
   if (extension === 'pdf') return '📄';
   if (['doc', 'docx'].includes(extension)) return '📝';
-  if (['xls', 'xlsx'].includes(extension)) return '📊';
+  if (['xls', 'xlsx', 'xlsm', 'xlsb', 'xltx', 'csv', 'tsv', 'ods'].includes(extension)) return '📊';
+  if (['pptx', 'ppt', 'ppsx', 'potx', 'pptm', 'potm'].includes(extension)) return '📽️';
   if (['zip', 'rar', '7z', 'tar', 'gz'].includes(extension)) return '📦';
   return '📄';
 };

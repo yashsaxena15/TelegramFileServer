@@ -18,6 +18,7 @@ import { useBackendConnection } from "@/hooks/useViteConnection";
 import authService from "@/lib/authService";
 // Import the error provider
 import { ErrorProvider } from "@/contexts/ErrorHandlerContext";
+import { MediaPlayerProvider } from "@/contexts/MediaPlayerContext";
 
 const queryClient = new QueryClient();
 
@@ -96,16 +97,18 @@ const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorProvider>
-        <BrowserRouter>
-          <div className="flex h-screen bg-background select-none">
-            <NavigationSidebar />
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <AppRoutes />
-              <Toaster />
-              {/* Remove the floating DownloadQueue component */}
+        <MediaPlayerProvider>
+          <BrowserRouter>
+            <div className="flex h-screen bg-background select-none overflow-hidden">
+              <NavigationSidebar />
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <AppRoutes />
+                <Toaster />
+                {/* Remove the floating DownloadQueue component */}
+              </div>
             </div>
-          </div>
-        </BrowserRouter>
+          </BrowserRouter>
+        </MediaPlayerProvider>
       </ErrorProvider>
     </QueryClientProvider>
   );

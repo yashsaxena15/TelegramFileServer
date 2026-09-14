@@ -758,7 +758,7 @@ export const FileExplorer = () => {
   }, []);
 
   return (
-    <div className="flex h-full bg-background text-foreground select-none">
+    <div className="flex h-full w-full bg-background text-foreground select-none min-h-0 overflow-hidden">
       <Sidebar
         currentPath={currentPath}
         onNavigate={handleFilterChange}
@@ -767,7 +767,7 @@ export const FileExplorer = () => {
         selectedFilter={selectedFilter}
       />
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {showProfile ? (
           <motion.div
             key="profile"
@@ -775,7 +775,7 @@ export const FileExplorer = () => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.3 }}
-            className="flex-1 flex flex-col h-full"
+            className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
           >
             <ProfileContent onBack={() => setShowProfile(false)} />
           </motion.div>
@@ -786,7 +786,7 @@ export const FileExplorer = () => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.3 }}
-            className="flex-1 flex flex-col h-full"
+            className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
           >
             <SettingsContent onBack={() => setShowSettings(false)} />
           </motion.div>
@@ -797,7 +797,7 @@ export const FileExplorer = () => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.3 }}
-            className="flex-1 flex flex-col h-full"
+            className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
           >
             <UserManagementContent onBack={() => {
               setShowUserManagement(false);
@@ -807,7 +807,7 @@ export const FileExplorer = () => {
             }} />
           </motion.div>
         ) : (
-          <div className="flex-1 flex flex-col">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             <TopBar
               currentPath={currentPath}
               searchQuery={searchQuery}
@@ -902,6 +902,11 @@ export const FileExplorer = () => {
           y={contextMenu.y}
           itemType={contextMenu.itemType}
           itemName={contextMenu.itemName}
+          onOpen={() => {
+            if (contextMenu.item && contextMenu.item.type === "folder") {
+              handleNavigate(contextMenu.item.name);
+            }
+          }}
           onCopy={() => contextMenu.item && handleCopy(contextMenu.item)}
           onCut={() => contextMenu.item && handleCut(contextMenu.item)}
           onPaste={hasClipboard && !isClipboardPasted() ? handlePaste : undefined}

@@ -8,6 +8,8 @@ import {
   Maximize2,
   Minimize2,
   FileText,
+  FileSpreadsheet,
+  Presentation,
   BookOpen,
   Copy,
   Check,
@@ -34,6 +36,8 @@ import "prismjs/components/prism-markup"; // html/xml
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-yaml";
 
+import { SpreadsheetViewer } from "./SpreadsheetViewer";
+import { PresentationViewer } from "./PresentationViewer";
 import { toast } from "sonner";
 
 interface DocumentReaderModalProps {
@@ -51,6 +55,10 @@ export const DocumentReaderModal = ({
 }: DocumentReaderModalProps) => {
   const ext = (fileExtension || fileName.split(".").pop() || "").toLowerCase();
 
+  const SPREADSHEET_EXTS = ["xlsx", "xls", "xlsm", "xlsb", "xltx", "csv", "tsv", "ods"];
+  const isSpreadsheet = SPREADSHEET_EXTS.includes(ext);
+  const PRESENTATION_EXTS = ["pptx", "ppt", "ppsx", "potx", "pptm", "potm"];
+  const isPresentation = PRESENTATION_EXTS.includes(ext);
   const isPdf = ext === "pdf";
   const isEpub = ext === "epub";
   const isComic = ext === "cbz" || ext === "cbr";
@@ -58,7 +66,7 @@ export const DocumentReaderModal = ({
   const isMarkdown = ext === "md" || ext === "markdown";
   const isCodeOrText = [
     "txt", "log", "json", "py", "js", "ts", "jsx", "tsx", "html", "css",
-    "sh", "bash", "yml", "yaml", "xml", "csv", "sql", "env", "ini", "conf"
+    "sh", "bash", "yml", "yaml", "xml", "sql", "env", "ini", "conf"
   ].includes(ext);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -98,6 +106,11 @@ export const DocumentReaderModal = ({
 
     const loadContent = async () => {
       try {
+        if (isSpreadsheet || isPresentation) {
+          if (isMounted) setIsLoading(false);
+          return;
+        }
+
         if (isCodeOrText || isMarkdown) {
           const res = await fetch(url);
           if (!res.ok) throw new Error(`Failed to fetch file (${res.status})`);
@@ -214,6 +227,10 @@ export const DocumentReaderModal = ({
               <BookOpen className="w-5 h-5 text-emerald-400" />
             ) : isDocx ? (
               <FileText className="w-5 h-5 text-blue-400" />
+            ) : isSpreadsheet ? (
+              <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+            ) : isPresentation ? (
+              <Presentation className="w-5 h-5 text-orange-400" />
             ) : (
               <FileText className="w-5 h-5 text-amber-400" />
             )}
@@ -223,7 +240,11 @@ export const DocumentReaderModal = ({
               {fileName}
             </h2>
             <p className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
-              {ext} preview
+              {isSpreadsheet
+                ? "Spreadsheet preview"
+                : isPresentation
+                ? "Presentation preview"
+                : `${ext} preview`}
             </p>
           </div>
         </div>
@@ -466,6 +487,16 @@ export const DocumentReaderModal = ({
               </code>
             </pre>
           </div>
+        )}
+
+        {/* 7. Spreadsheet Viewer (Excel, CSV, TSV, ODS) */}
+        {isSpreadsheet && !error && (
+          <SpreadsheetViewer url={url} fileName={fileName} />
+        )}
+
+        {/* 8. Presentation Viewer (PowerPoint, PPTX, PPT, etc.) */}
+        {isPresentation && !error && (
+          <PresentationViewer url={url} fileName={fileName} />
         )}
       </div>
     </div>

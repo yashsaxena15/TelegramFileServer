@@ -139,6 +139,7 @@ app.include_router(user_router)
 app.include_router(stream_router)
 app.include_router(media_router)
 app.include_router(archive_router)
+app.include_router(archive_router, prefix="/api")
 app.include_router(telegram_router)
 app.mount("/assets", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist", "assets")), name="assets")
 # Register exception handlers
