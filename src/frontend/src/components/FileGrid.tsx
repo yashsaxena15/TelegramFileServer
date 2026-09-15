@@ -1710,6 +1710,16 @@ export const FileGrid = ({
               <p className="text-sm text-muted-foreground">Loading...</p>
             </div>
           </div>
+        ) : items.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center min-h-[320px] text-center p-6 select-none pointer-events-none">
+            <div className="w-14 h-14 rounded-2xl bg-muted/60 flex items-center justify-center mb-3 text-2xl shadow-inner">
+              📁
+            </div>
+            <h3 className="text-sm font-semibold text-foreground mb-1">No items found</h3>
+            <p className="text-xs text-muted-foreground max-w-xs">
+              No files or folders match your search or filter criteria in this view.
+            </p>
+          </div>
         ) : viewMode === "grid" ? (
           <div 
             data-grid-background="true"

@@ -44,6 +44,36 @@ A modern, high-performance, self-hosted Cloud Storage and Media Streaming Server
 
 ---
 
+### 🌐 Desktop & Mobile WebDAV Mount (RaiDrive / MiXplorer / Finder)
+- **RFC 4918 Compliant WebDAV Server (`/webdav/`)**: Mount your Telegram cloud drive directly into Windows Explorer, macOS Finder, or mobile file managers like a local hard disk.
+- **4 Virtual Root Folders**:
+  - `📁 Home`: Full directory tree with customized folders.
+  - `📁 Telegram Inbox`: Direct access to incoming channel files.
+  - `📁 Starred`: Quick access to favorite items.
+  - `📁 Trash`: Soft-deleted files with recycle bin behavior.
+- **Full Read & Write Support**:
+  - *High-Speed Streaming (`GET`, `HEAD`)*: Multi-bot parallel streaming with HTTP 206 Partial Content byte-range seeking for media playback in VLC, MX Player, etc.
+  - *Drag-and-Drop Uploads (`PUT`)*: Upload files directly to Telegram channels through Windows Explorer or file managers.
+  - *Folder Creation (`MKCOL`)*: Create folders seamlessly from any client.
+  - *File Deletion (`DELETE`)*: Soft-delete to Trash from Home; permanent purge when deleting from Trash.
+  - *Move & Rename (`MOVE`)*: Reorganize files and folders on-the-fly.
+  - *RFC 4918 File Locking (`LOCK`, `UNLOCK`)*: Flawless compatibility with RaiDrive and Microsoft Office file locking handshakes.
+- **Easy Setup UI**: Built-in "Connect Drive (WebDAV)" dialog in the web interface with one-click copy for Host, Port, and Path, plus dedicated step-by-step setup guides for **RaiDrive** (Windows) and **MiXplorer** (Android).
+
+---
+
+### 🔍 Comprehensive Multi-Field Filtering & Sorting
+- **Available Everywhere**: Seamlessly integrated across **Home**, **Telegram Inbox**, **Starred**, and **Trash**.
+- **Multi-Field Sorting**:
+  - Sort by **Name** (A–Z / Z–A), **Date Modified** (Newest / Oldest), **File Size** (Largest / Smallest), and **Type** (Folders First).
+- **Three-Dimensional Filtering**:
+  - **Type Filter**: All, Folders, Videos, Images, Audio, Documents, and Archives.
+  - **Size Filter**: All, Small (<10 MB), Medium (10–100 MB), Large (100 MB–1 GB), and Very Large (>1 GB).
+  - **Date Filter**: All, Today, Last 7 Days, Last 30 Days, and This Year.
+- **Dynamic Active Filter Pills**: Instantly clear individual filters or reset all with a single click.
+
+---
+
 ### 🎬 Advanced Media Player & Streaming
 - **Dynamic Multi-Resolution Ladder**: Switch between **4K (2160p)**, **2K (1440p)**, **1080p**, **720p**, **480p**, **360p**, **240p**, and **144p** on-the-fly.
   - *Intelligent Ladder Capping*: The player probes the native video resolution and automatically caps the menu so lower-resolution videos never show upscale options.
@@ -243,6 +273,13 @@ python __main__.py
 - **`GET /api/folders/download/{folder_id}`**: On-the-fly multi-part Zip streaming for entire folders.
 - **`GET /api/folders/properties/{folder_id}`**: Recursive file count and size calculations.
 - **`POST /api/auth/login`**: User authentication (local credentials and session tokens).
+- **`PROPFIND /webdav/{path}`**: WebDAV directory listing and metadata retrieval (Home, Inbox, Starred, Trash).
+- **`GET /webdav/{path}`**: High-speed WebDAV streaming and file download with byte-range support.
+- **`PUT /webdav/{path}`**: WebDAV file upload pipeline directly to Telegram storage.
+- **`MKCOL /webdav/{path}`**: WebDAV folder creation.
+- **`DELETE /webdav/{path}`**: WebDAV file and folder deletion (soft-delete to Trash / permanent purge).
+- **`MOVE /webdav/{path}`**: WebDAV file and folder renaming and movement across directories.
+- **`LOCK / UNLOCK /webdav/{path}`**: WebDAV active lock token handshakes for desktop mounting.
 
 Interactive OpenAPI documentation is available at **`/docs`** when the server is running.
 

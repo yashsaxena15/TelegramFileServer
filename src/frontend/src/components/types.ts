@@ -36,9 +36,47 @@ export interface ApiFile {
   original_path?: string;
 }
 
-const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'];
-const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'];
-const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'wma'];
+export type SortField = "name" | "date" | "size";
+export type SortOrder = "asc" | "desc";
+export type FileTypeFilter = "all" | "folder" | "video" | "document" | "photo" | "audio" | "archive";
+export type SizeFilter = "all" | "small" | "medium" | "large" | "huge";
+export type DateFilter = "all" | "today" | "week" | "month";
+
+export const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'ts'];
+export const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'];
+export const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'wma'];
+export const ARCHIVE_EXTS = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso', 'tgz'];
+export const DOCUMENT_EXTS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'txt', 'csv', 'epub', 'md', 'json', 'log'];
+
+export const isVideoItem = (item: FileItem): boolean =>
+  item.type !== 'folder' && (
+    item.fileType === 'video' ||
+    Boolean(item.extension && VIDEO_EXTS.includes(item.extension.toLowerCase()))
+  );
+
+export const isPhotoItem = (item: FileItem): boolean =>
+  item.type !== 'folder' && (
+    item.fileType === 'photo' ||
+    Boolean(item.extension && PHOTO_EXTS.includes(item.extension.toLowerCase()))
+  );
+
+export const isAudioItem = (item: FileItem): boolean =>
+  item.type !== 'folder' && (
+    item.fileType === 'audio' ||
+    item.fileType === 'voice' ||
+    Boolean(item.extension && AUDIO_EXTS.includes(item.extension.toLowerCase()))
+  );
+
+export const isArchiveItem = (item: FileItem): boolean =>
+  item.type !== 'folder' &&
+  Boolean(item.extension && ARCHIVE_EXTS.includes(item.extension.toLowerCase()));
+
+export const isDocumentItem = (item: FileItem): boolean =>
+  item.type !== 'folder' &&
+  !isVideoItem(item) &&
+  !isPhotoItem(item) &&
+  !isAudioItem(item) &&
+  !isArchiveItem(item);
 
 // Utility function to get icon based on file type
 export const getFileIcon = (fileType: string, fileName?: string): string => {

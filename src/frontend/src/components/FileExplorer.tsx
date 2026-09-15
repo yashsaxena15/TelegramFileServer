@@ -1,7 +1,19 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useParams, useNavigate } from "react-router-dom";
-import { FileItem } from "@/components/types";
+import {
+  FileItem,
+  SortField,
+  SortOrder,
+  FileTypeFilter,
+  SizeFilter,
+  DateFilter,
+  isVideoItem,
+  isPhotoItem,
+  isAudioItem,
+  isArchiveItem,
+  isDocumentItem,
+} from "@/components/types";
 import { ContextMenu } from "./ContextMenu";
 import { useFiles } from "@/hooks/useFiles";
 import { useFileOperations } from "@/hooks/useFileOperations";
@@ -40,6 +52,7 @@ import { downloadManager } from "@/lib/downloadManager";
 import { motion, AnimatePresence } from "framer-motion";
 import { useError } from "@/contexts/ErrorHandlerContext"; // Import the error context
 import { FolderDownloadDialog, FolderDownloadInfo, FolderPartInfo } from "./FolderDownloadDialog";
+import { WebDAVMountDialog } from "./WebDAVMountDialog";
 
 export const FileExplorer = () => {
   const location = useLocation();
@@ -97,7 +110,15 @@ export const FileExplorer = () => {
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemType: "file" | "folder" | "empty"; itemName: string; item?: FileItem; index?: number } | null>(null);
   const [folderDownloadInfo, setFolderDownloadInfo] = useState<FolderDownloadInfo | null>(null);
+  const [showWebDAVDialog, setShowWebDAVDialog] = useState(false);
   const queryClient = useQueryClient();
+
+  // Listen for showWebDAVMount custom events
+  useEffect(() => {
+    const handleOpenWebDAV = () => setShowWebDAVDialog(true);
+    window.addEventListener('showWebDAVMount', handleOpenWebDAV);
+    return () => window.removeEventListener('showWebDAVMount', handleOpenWebDAV);
+  }, []);
 
   // Handle clicks outside the download widget to close it
   useEffect(() => {
@@ -369,64 +390,155 @@ export const FileExplorer = () => {
   const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
   const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
 
-  // Filter files based on current path and search query
-  const getFilteredItems = (): FileItem[] => {
-    // If we're in Home and no filter is selected, show user-created folders and files in root
+  // Sort state
+  const [sortField, setSortField] = useState<SortField>("name");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
+  const [foldersFirst, setFoldersFirst] = useState<boolean>(true);
+
+  // Filter state
+  const [typeFilter, setTypeFilter] = useState<FileTypeFilter>("all");
+  const [sizeFilter, setSizeFilter] = useState<SizeFilter>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+
+  // Base items in current folder/section
+  const baseItems = useMemo((): FileItem[] => {
+    if (!Array.isArray(files)) return [];
     if (currentFolder === "Home" && selectedFilter === "all") {
-      // Add user-created folders (those with type 'folder')
-      const userFolders = files.filter((f) => f.type === "folder");
-      const filteredUserFolders = userFolders.filter((folder) =>
-        folder.name.toLowerCase().includes(searchQuery.toLowerCase())
+      return files.filter(
+        (f) => f.type === "folder" || f.file_path === "/Home" || f.file_path === "/"
       );
+    }
+    return files;
+  }, [files, currentFolder, selectedFilter]);
 
-      // Add files that are directly in the root directory (Home)
-      const rootFiles = files.filter((f) => f.type !== "folder" && f.file_path === "/Home");
-      const filteredRootFiles = rootFiles.filter((file) =>
-        file.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+  // Compute category counts for quick filter chips
+  const typeCounts = useMemo((): Record<FileTypeFilter, number> => {
+    const counts: Record<FileTypeFilter, number> = {
+      all: baseItems.length,
+      folder: 0,
+      video: 0,
+      document: 0,
+      photo: 0,
+      audio: 0,
+      archive: 0,
+    };
 
-      // Combine folders and root files, then sort
-      const allItems = [...filteredUserFolders, ...filteredRootFiles];
-      return allItems.sort((a, b) => {
-        // If both are folders or both are files, sort alphabetically
-        if (a.type === b.type) {
-          return a.name.localeCompare(b.name);
-        }
-        // If 'a' is a folder and 'b' is a file, 'a' comes first
-        if (a.type === "folder") {
-          return -1;
-        }
-        // If 'a' is a file and 'b' is a folder, 'b' comes first
-        return 1;
+    for (const item of baseItems) {
+      if (!item) continue;
+      if (item.type === "folder") {
+        counts.folder += 1;
+      } else if (isVideoItem(item)) {
+        counts.video += 1;
+      } else if (isPhotoItem(item)) {
+        counts.photo += 1;
+      } else if (isAudioItem(item)) {
+        counts.audio += 1;
+      } else if (isArchiveItem(item)) {
+        counts.archive += 1;
+      } else if (isDocumentItem(item)) {
+        counts.document += 1;
+      }
+    }
+
+    return counts;
+  }, [baseItems]);
+
+  // Filtered and sorted items
+  const filteredItems = useMemo((): FileItem[] => {
+    let result = [...baseItems];
+
+    // 1. Search filter
+    if (searchQuery && searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      result = result.filter((item) => (item?.name || "").toLowerCase().includes(q));
+    }
+
+    // 2. Type filter
+    if (typeFilter !== "all") {
+      result = result.filter((item) => {
+        if (!item) return false;
+        if (typeFilter === "folder") return item.type === "folder";
+        if (item.type === "folder") return false;
+        if (typeFilter === "video") return isVideoItem(item);
+        if (typeFilter === "photo") return isPhotoItem(item);
+        if (typeFilter === "audio") return isAudioItem(item);
+        if (typeFilter === "archive") return isArchiveItem(item);
+        if (typeFilter === "document") return isDocumentItem(item);
+        return true;
       });
     }
 
-    // If we're in a specific folder or have a filter, show files
-    let filteredFiles = files;
-
-    // Apply search filter
-    if (searchQuery) {
-      filteredFiles = filteredFiles.filter((item) =>
-        item.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+    // 3. Size filter
+    if (sizeFilter !== "all") {
+      result = result.filter((item) => {
+        if (!item) return false;
+        if (item.type === "folder") return true;
+        const size = typeof item.size === "number" ? item.size : 0;
+        if (sizeFilter === "small") return size < 10 * 1024 * 1024;
+        if (sizeFilter === "medium") return size >= 10 * 1024 * 1024 && size < 100 * 1024 * 1024;
+        if (sizeFilter === "large") return size >= 100 * 1024 * 1024 && size < 1024 * 1024 * 1024;
+        if (sizeFilter === "huge") return size >= 1024 * 1024 * 1024;
+        return true;
+      });
     }
 
-    // Sort folders first, then files, both alphabetically
-    return filteredFiles.sort((a, b) => {
-      // If both are folders or both are files, sort alphabetically
-      if (a.type === b.type) {
-        return a.name.localeCompare(b.name);
-      }
-      // If 'a' is a folder and 'b' is a file, 'a' comes first
-      if (a.type === "folder") {
-        return -1;
-      }
-      // If 'a' is a file and 'b' is a folder, 'b' comes first
-      return 1;
-    });
-  };
+    // 4. Date filter
+    if (dateFilter !== "all") {
+      const now = Date.now();
+      const oneDay = 24 * 60 * 60 * 1000;
+      result = result.filter((item) => {
+        if (!item) return false;
+        const dateStr = item.trashed_at || item.modified;
+        if (!dateStr) return true;
+        const time = new Date(dateStr).getTime();
+        if (isNaN(time)) return true;
+        const diff = now - time;
+        if (dateFilter === "today") return diff <= oneDay;
+        if (dateFilter === "week") return diff <= 7 * oneDay;
+        if (dateFilter === "month") return diff <= 30 * oneDay;
+        return true;
+      });
+    }
 
-  const filteredItems = getFilteredItems();
+    // 5. Sorting
+    result.sort((a, b) => {
+      if (!a || !b) return 0;
+      if (foldersFirst && a.type !== b.type) {
+        return a.type === "folder" ? -1 : 1;
+      }
+
+      let comparison = 0;
+      if (sortField === "name") {
+        const nameA = a.name || "";
+        const nameB = b.name || "";
+        comparison = nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: "base" });
+      } else if (sortField === "size") {
+        const sizeA = typeof a.size === "number" ? a.size : 0;
+        const sizeB = typeof b.size === "number" ? b.size : 0;
+        comparison = sizeA - sizeB;
+      } else if (sortField === "date") {
+        const getDateScore = (item: FileItem): number => {
+          if (item.trashed_at) {
+            const t = new Date(item.trashed_at).getTime();
+            if (!isNaN(t)) return t;
+          }
+          if (item.modified) {
+            const t = new Date(item.modified).getTime();
+            if (!isNaN(t)) return t;
+          }
+          if (typeof item.message_id === "number") {
+            return item.message_id;
+          }
+          return 0;
+        };
+        comparison = getDateScore(a) - getDateScore(b);
+      }
+
+      return sortOrder === "asc" ? comparison : -comparison;
+    });
+
+    return result;
+  }, [baseItems, searchQuery, typeFilter, sizeFilter, dateFilter, sortField, sortOrder, foldersFirst]);
 
   const handleNavigate = (folderName: string) => {
     // Navigate into user-created folders
@@ -492,6 +604,30 @@ export const FileExplorer = () => {
       setCurrentPath([folderName]);
     }
     setSelectedFilter(filter);
+
+    // Reset filters on section change
+    setTypeFilter("all");
+    setSizeFilter("all");
+    setDateFilter("all");
+
+    // Set intelligent default sort for each section
+    if (filter === "inbox") {
+      setSortField("date");
+      setSortOrder("desc"); // Newest forwarded files first
+      setFoldersFirst(false);
+    } else if (filter === "trash") {
+      setSortField("date");
+      setSortOrder("desc"); // Recently trashed files first
+      setFoldersFirst(true);
+    } else if (filter === "starred") {
+      setSortField("date");
+      setSortOrder("desc");
+      setFoldersFirst(true);
+    } else {
+      setSortField("name");
+      setSortOrder("asc");
+      setFoldersFirst(true);
+    }
   };
 
   const handleSidebarDrop = async (item: FileItem, targetFolderName: string) => {
@@ -916,6 +1052,7 @@ export const FileExplorer = () => {
         selectedFilter={selectedFilter}
         activeView={activeView}
         onNavigateView={handleNavigateView}
+        onOpenWebDAV={() => setShowWebDAVDialog(true)}
       />
 
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -1004,6 +1141,30 @@ export const FileExplorer = () => {
               onBack={() => window.history.back()}
               onRefresh={refetch}
               onBreadcrumbClick={handleBreadcrumbClick}
+              sortField={sortField}
+              sortOrder={sortOrder}
+              foldersFirst={foldersFirst}
+              onSortChange={(field, order) => {
+                setSortField(field);
+                setSortOrder(order);
+              }}
+              onFoldersFirstChange={setFoldersFirst}
+              typeFilter={typeFilter}
+              onTypeFilterChange={setTypeFilter}
+              sizeFilter={sizeFilter}
+              onSizeFilterChange={setSizeFilter}
+              dateFilter={dateFilter}
+              onDateFilterChange={setDateFilter}
+              onResetFilters={() => {
+                setTypeFilter("all");
+                setSizeFilter("all");
+                setDateFilter("all");
+                setSearchQuery("");
+              }}
+              typeCounts={typeCounts}
+              totalCount={baseItems.length}
+              filteredCount={filteredItems.length}
+              isInboxMode={isInboxMode}
             />
 
             {/* Trash Banner */}
@@ -1126,6 +1287,11 @@ export const FileExplorer = () => {
         onClose={() => setFolderDownloadInfo(null)}
         onDownloadPart={handleDownloadFolderPart}
         onDownloadAll={handleDownloadAllFolderParts}
+      />
+
+      <WebDAVMountDialog
+        open={showWebDAVDialog}
+        onOpenChange={setShowWebDAVDialog}
       />
 
       {contextMenu && (

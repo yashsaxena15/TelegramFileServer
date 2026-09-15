@@ -7,9 +7,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Define exception handlers as functions that can be registered on the main app
 async def unauthorized_handler(request: Request, exc):
+    headers = dict(getattr(exc, "headers", None) or {})
+    if request.url.path.startswith("/webdav"):
+        headers.setdefault("WWW-Authenticate", 'Basic realm="TelegramFileServer WebDAV"')
     return JSONResponse(
         status_code=401,
-        content={"detail": "Authentication required"}
+        content={"detail": getattr(exc, "detail", "Authentication required")},
+        headers=headers if headers else None
     )
 
 async def not_found_handler(request: Request, exc):

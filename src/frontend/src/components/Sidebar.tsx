@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { 
   FolderOpen, Star, Trash2, 
-  HardDrive, User, Settings, Download, Users, LogOut, Inbox 
+  HardDrive, User, Settings, Download, Users, LogOut, Inbox, Laptop 
 } from "lucide-react";
 import { FileItem } from "./types";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -17,6 +17,7 @@ interface SidebarProps {
   selectedFilter: string;
   activeView?: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'downloads';
   onNavigateView?: (view: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'downloads', filter?: string) => void;
+  onOpenWebDAV?: () => void;
 }
 
 export const Sidebar = ({ 
@@ -26,7 +27,8 @@ export const Sidebar = ({
   files, 
   selectedFilter,
   activeView = 'files',
-  onNavigateView 
+  onNavigateView,
+  onOpenWebDAV
 }: SidebarProps) => {
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
   const [isOwner, setIsOwner] = useState(false);
@@ -216,6 +218,35 @@ export const Sidebar = ({
             </button>
           );
         })}
+
+        {/* Integrations Section */}
+        <div className="my-2 border-t border-sidebar-border" />
+
+        <div className="px-4 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Integrations
+        </div>
+
+        <button
+          onClick={() => {
+            if (onOpenWebDAV) {
+              onOpenWebDAV();
+            } else {
+              window.dispatchEvent(new CustomEvent('showWebDAVMount'));
+            }
+          }}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-all text-sidebar-foreground hover:bg-sidebar-accent/50 group"
+          title="Mount to RaiDrive, Windows Explorer, or MiXplorer"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          <Laptop className="w-4 h-4 text-primary group-hover:scale-110 transition-transform" />
+          <div className="flex items-center justify-between flex-1 min-w-0">
+            <span className="truncate">Connect Drive</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium shrink-0">WebDAV</span>
+          </div>
+        </button>
 
         <button
           onClick={handleLogout}

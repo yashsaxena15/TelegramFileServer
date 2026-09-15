@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Home, FolderOpen, User, Settings, LogOut, Info, Download, X, Star, Trash2, HardDrive, Inbox } from "lucide-react";
+import { Home, FolderOpen, User, Settings, LogOut, Info, Download, X, Star, Trash2, HardDrive, Inbox, Laptop } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { motion, AnimatePresence } from "framer-motion";
@@ -97,6 +97,7 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
   };
 
   const baseNavItems = [
+    { name: "Connect Drive (WebDAV)", path: "#webdav", icon: Laptop },
     { name: "Storage & Analytics", path: "/storage", icon: HardDrive },
     { name: "Profile", path: "/profile", icon: User },
     { name: "Settings", path: "/settings", icon: Settings },
@@ -139,7 +140,9 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
   const navItems = isOwner ? [...baseNavItems, ...ownerNavItems] : baseNavItems;
 
   const handleMenuClick = (item: string, path?: string) => {
-    if (item === "Storage & Analytics") {
+    if (item === "Connect Drive (WebDAV)") {
+      window.dispatchEvent(new CustomEvent('showWebDAVMount'));
+    } else if (item === "Storage & Analytics") {
       const event = new CustomEvent('showStorageAnalytics');
       window.dispatchEvent(event);
       navigate("/storage");
