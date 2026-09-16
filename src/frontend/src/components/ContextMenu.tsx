@@ -17,6 +17,7 @@ import {
   Upload,
   RotateCcw,
   Archive,
+  Link,
 } from "lucide-react";
 
 interface ContextMenuProps {
@@ -43,6 +44,8 @@ interface ContextMenuProps {
   onExtractArchive?: () => void; // Extract ZIP in cloud
   onCompress?: () => void; // Compress to ZIP
   isArchive?: boolean; // Is current item a zip/archive?
+  isVideo?: boolean; // Is current item a video?
+  onCopyStreamUrl?: () => void; // Copy streaming URL
   selectedCount?: number; // Number of selected items
   isStarred?: boolean;
   onToggleStar?: () => void;
@@ -84,6 +87,8 @@ export const ContextMenu = ({
   onExtractArchive,
   onCompress,
   isArchive = false,
+  isVideo = false,
+  onCopyStreamUrl,
   selectedCount = 1,
   isStarred = false,
   onToggleStar,
@@ -125,6 +130,10 @@ export const ContextMenu = ({
     switch (action) {
       case "open":
         onOpen?.();
+        onClose();
+        break;
+      case "copy_stream_url":
+        onCopyStreamUrl?.();
         onClose();
         break;
       case "toggle_star":
@@ -256,6 +265,15 @@ export const ContextMenu = ({
               action: "open",
               shortcut: "Enter",
             },
+            ...(isVideo && onCopyStreamUrl
+              ? [
+                  {
+                    icon: Link,
+                    label: "Copy Stream URL",
+                    action: "copy_stream_url",
+                  },
+                ]
+              : []),
             {
               icon: Star,
               label: isStarred ? "Remove from Starred" : "Add to Starred",

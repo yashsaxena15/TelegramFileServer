@@ -2,6 +2,8 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { invoke } from "@tauri-apps/api/core";
 import authService from "@/lib/authService";
+import { getApiBaseUrl } from "@/lib/api";
+import { toast } from "sonner";
 
 // Extend window interface to include __TAURI__
 declare global {
@@ -513,4 +515,66 @@ export function formatBytes(bytes?: number, decimals: number = 2): string {
   if (i >= sizes.length) return `${(bytes / Math.pow(k, sizes.length - 1)).toFixed(dm)} ${sizes[sizes.length - 1]}`;
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
+
+/**
+ * Constructs the absolute streaming URL for a given file item or file name.
+ */
+export function getStreamingUrl(fileName: string): string {
+  const baseUrl = getApiBaseUrl();
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  const sep = tokenParam ? '&' : '?';
+  const rawUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(fileName)}${tokenParam}${sep}inline=1`;
+
+  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+    return rawUrl;
+  }
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+  }
+  return rawUrl;
+}
+
+/**
+ * Copies the streaming URL of a file to clipboard with fallback and shows toast feedback.
+ */
+export async function copyStreamUrl(fileName: string): Promise<boolean> {
+  const streamUrl = getStreamingUrl(fileName);
+  let success = false;
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(streamUrl);
+      success = true;
+    }
+  } catch (err) {
+    console.warn("navigator.clipboard.writeText failed:", err);
+  }
+
+  if (!success && typeof document !== 'undefined') {
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = streamUrl;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      success = document.execCommand("copy");
+      textArea.remove();
+    } catch (e) {
+      console.error("Fallback clipboard copy failed:", e);
+    }
+  }
+
+  if (success) {
+    toast.success("Stream link copied to clipboard!");
+  } else {
+    toast.error("Failed to copy stream link");
+  }
+
+  return success;
+}
+
 

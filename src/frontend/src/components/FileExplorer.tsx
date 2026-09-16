@@ -18,6 +18,7 @@ import { ContextMenu } from "./ContextMenu";
 import { useFiles } from "@/hooks/useFiles";
 import { useFileOperations } from "@/hooks/useFileOperations";
 import { toast } from "sonner";
+import { copyStreamUrl } from "@/lib/utils";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { FileGrid } from "./FileGrid";
@@ -1300,6 +1301,12 @@ export const FileExplorer = () => {
           y={contextMenu.y}
           itemType={contextMenu.itemType}
           itemName={contextMenu.itemName}
+          isVideo={contextMenu.item ? isVideoItem(contextMenu.item) : false}
+          onCopyStreamUrl={() => {
+            if (contextMenu.item) {
+              copyStreamUrl(contextMenu.item.name);
+            }
+          }}
           onOpen={() => {
             if (contextMenu.item && contextMenu.item.type === "folder") {
               handleNavigate(contextMenu.item.name);

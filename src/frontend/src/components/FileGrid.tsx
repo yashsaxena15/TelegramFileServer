@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { FileItem } from "@/components/types";
+import { FileItem, isVideoItem } from "@/components/types";
+import { copyStreamUrl } from "@/lib/utils";
 import { TraversedFile } from "@/lib/folderTraversal"; // Add this import
 import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check, X, Trash2, Download, Info, Star, RotateCcw } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
@@ -2114,6 +2115,7 @@ export const FileGrid = ({
       {contextMenu && (() => {
         const cmExt = (contextMenu.item?.extension || contextMenu.item?.name?.split('.').pop() || '').toLowerCase();
         const isArchiveItem = ['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z'].includes(cmExt);
+        const isVideo = contextMenu.item ? isVideoItem(contextMenu.item) : false;
         const selectedCount = selectedItems.size > 0 ? selectedItems.size : 1;
         return (
           <ContextMenu
@@ -2121,6 +2123,8 @@ export const FileGrid = ({
             y={contextMenu.y}
             itemType={contextMenu.itemType}
             itemName={contextMenu.itemName}
+            isVideo={isVideo}
+            onCopyStreamUrl={() => contextMenu.item && copyStreamUrl(contextMenu.item.name)}
             onOpen={() => contextMenu.item && handleItemOpen(contextMenu.item)}
             onCopy={() => contextMenu.item && onCopy(contextMenu.item)}
             onCut={() => contextMenu.item && onCut(contextMenu.item)}

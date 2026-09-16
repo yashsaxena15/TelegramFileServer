@@ -48,11 +48,12 @@ export const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'w
 export const ARCHIVE_EXTS = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso', 'tgz'];
 export const DOCUMENT_EXTS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'txt', 'csv', 'epub', 'md', 'json', 'log'];
 
-export const isVideoItem = (item: FileItem): boolean =>
-  item.type !== 'folder' && (
-    item.fileType === 'video' ||
-    Boolean(item.extension && VIDEO_EXTS.includes(item.extension.toLowerCase()))
-  );
+export const isVideoItem = (item: FileItem): boolean => {
+  if (!item || item.type === 'folder') return false;
+  if (item.fileType === 'video') return true;
+  const ext = (item.extension || item.name?.split('.').pop() || '').toLowerCase();
+  return VIDEO_EXTS.includes(ext);
+};
 
 export const isPhotoItem = (item: FileItem): boolean =>
   item.type !== 'folder' && (
