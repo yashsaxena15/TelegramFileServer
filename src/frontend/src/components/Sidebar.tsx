@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { 
   FolderOpen, Star, Trash2, 
   HardDrive, User, Settings, Users, LogOut, Inbox, Laptop,
-  ArrowUpDown, Plus, FolderPlus, FileUp, FolderUp, X, PanelLeft
+  ArrowUpDown, X, PanelLeft
 } from "lucide-react";
 import { FileItem } from "./types";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -10,13 +10,6 @@ import { api, UserProfile } from "@/lib/api";
 import authService from "@/lib/authService";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator
-} from "@/components/ui/dropdown-menu";
 import { useTransferManager } from "@/hooks/useTransferManager";
 
 interface SidebarProps {
@@ -185,74 +178,7 @@ export const Sidebar = ({
         )}
       </div>
 
-      {/* Google Drive Style "+ New" Action Button */}
-      <div className={`p-3 border-b border-sidebar-border/50 ${collapsed ? "px-2" : ""}`}>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            {collapsed ? (
-              <Button
-                className="w-10 h-10 rounded-2xl bg-white dark:bg-gray-800 text-foreground border border-border shadow-md hover:shadow-lg hover:bg-accent flex items-center justify-center mx-auto"
-                size="icon"
-                title="New"
-              >
-                <Plus className="w-5 h-5 text-primary stroke-[2.5]" />
-              </Button>
-            ) : (
-              <Button
-                className="w-full h-11 rounded-2xl bg-white dark:bg-gray-800 text-foreground border border-border shadow-sm hover:shadow-md hover:bg-accent/80 flex items-center justify-start gap-3 px-4 font-medium transition-all"
-              >
-                <Plus className="w-5 h-5 text-primary stroke-[2.5]" />
-                <span className="text-sm font-semibold">New</span>
-              </Button>
-            )}
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align={collapsed ? "center" : "start"} className="w-52 p-1.5 rounded-xl shadow-xl">
-            {onNewFolder && (
-              <DropdownMenuItem
-                onClick={() => {
-                  onNewFolder();
-                  if (isMobile && onCloseMobile) onCloseMobile();
-                }}
-                className="flex items-center gap-2.5 py-2.5 px-3 cursor-pointer rounded-lg text-sm"
-              >
-                <FolderPlus className="w-4 h-4 text-blue-500" />
-                <span>New folder</span>
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => {
-                if (onUploadFiles) {
-                  onUploadFiles();
-                } else {
-                  const input = document.querySelector('input[type="file"]:not([webkitdirectory])') as HTMLInputElement;
-                  input?.click();
-                }
-                if (isMobile && onCloseMobile) onCloseMobile();
-              }}
-              className="flex items-center gap-2.5 py-2.5 px-3 cursor-pointer rounded-lg text-sm"
-            >
-              <FileUp className="w-4 h-4 text-emerald-500" />
-              <span>File upload</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                if (onUploadFolder) {
-                  onUploadFolder();
-                } else {
-                  const input = document.querySelector('input[type="file"][webkitdirectory]') as HTMLInputElement;
-                  input?.click();
-                }
-                if (isMobile && onCloseMobile) onCloseMobile();
-              }}
-              className="flex items-center gap-2.5 py-2.5 px-3 cursor-pointer rounded-lg text-sm"
-            >
-              <FolderUp className="w-4 h-4 text-amber-500" />
-              <span>Folder upload</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+
 
       {/* Navigation list */}
       <nav className="flex-1 overflow-y-auto py-2 custom-scrollbar">

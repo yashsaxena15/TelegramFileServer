@@ -45,10 +45,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import logger from "@/lib/logger";
 import { X as XIcon, Trash2, RotateCcw, AlertCircle } from "lucide-react";
-import DownloadQueue from "./DownloadQueue";
 import { downloadManager } from "@/lib/downloadManager";
 import { motion, AnimatePresence } from "framer-motion";
 import { useError } from "@/contexts/ErrorHandlerContext"; // Import the error context
@@ -102,9 +100,6 @@ export const FileExplorer = () => {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [emptyTrashDialogOpen, setEmptyTrashDialogOpen] = useState(false); // State to confirm empty trash
   const [isEmptyingTrash, setIsEmptyingTrash] = useState(false);
-  const [showDownloadQueue, setShowDownloadQueue] = useState(false); // State to track if download queue should be shown
-  const [autoCloseTimer, setAutoCloseTimer] = useState<NodeJS.Timeout | null>(null); // Timer for auto-closing widget
-  const downloadWidgetRef = useRef<HTMLDivElement>(null); // Ref for download widget
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
@@ -122,54 +117,6 @@ export const FileExplorer = () => {
     window.addEventListener('showWebDAVMount', handleOpenWebDAV);
     return () => window.removeEventListener('showWebDAVMount', handleOpenWebDAV);
   }, []);
-
-  // Handle clicks outside the download widget to close it
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (showDownloadQueue && downloadWidgetRef.current && !downloadWidgetRef.current.contains(event.target as Node)) {
-        setShowDownloadQueue(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showDownloadQueue]);
-
-  // Auto-close widget after 5 seconds when a download starts
-  useEffect(() => {
-    // Subscribe to download manager to detect when downloads start
-    const unsubscribe = downloadManager.subscribe((downloads) => {
-      const hasActiveDownloads = downloads.some(d => d.status === 'downloading' || d.status === 'queued');
-      
-      if (hasActiveDownloads && !showDownloadQueue) {
-        // Open the widget when a download starts
-        setShowDownloadQueue(true);
-        
-        // Clear any existing timer
-        if (autoCloseTimer) {
-          clearTimeout(autoCloseTimer);
-          setAutoCloseTimer(null);
-        }
-        
-        // Set timer to close the widget after 5 seconds
-        const timer = setTimeout(() => {
-          setShowDownloadQueue(false);
-          setAutoCloseTimer(null);
-        }, 5000);
-        
-        setAutoCloseTimer(timer);
-      }
-    });
-
-    return () => {
-      unsubscribe();
-      if (autoCloseTimer) {
-        clearTimeout(autoCloseTimer);
-      }
-    };
-  }, [showDownloadQueue, autoCloseTimer]);
 
   // Save currentPath to localStorage whenever it changes
   useEffect(() => {
@@ -1238,22 +1185,6 @@ export const FileExplorer = () => {
         )}
       </div>
 
-      {/* Download Queue Widget - Show when showDownloadQueue is true */}
-      {showDownloadQueue && (
-        <div 
-          ref={downloadWidgetRef}
-          className="fixed top-28 right-4 z-50 mt-2"
-        >
-          <Card className="w-80 shadow-xl">
-            <CardContent className="p-0">
-              <DownloadQueue 
-                isOpen={true}
-                onToggle={() => setShowDownloadQueue(false)}
-              />
-            </CardContent>
-          </Card>
-        </div>
-      )}
 
       <DeleteDialog
         open={!!deleteDialog}

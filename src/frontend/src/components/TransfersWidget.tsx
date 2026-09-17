@@ -76,9 +76,9 @@ export const TransfersWidget = () => {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-[calc(100vw-2rem)] sm:w-96 shadow-2xl rounded-xl border border-border bg-background/95 backdrop-blur-md overflow-hidden transition-all duration-300 ease-in-out">
+    <div className="fixed bottom-4 right-4 z-40 w-[calc(100vw-2rem)] sm:w-96 shadow-2xl rounded-xl border border-border bg-card text-card-foreground overflow-hidden transition-all duration-300 ease-in-out">
       {/* Header Bar */}
-      <div className="px-4 py-2.5 bg-secondary/70 border-b border-border flex items-center justify-between">
+      <div className="px-4 py-2.5 bg-card hover:bg-muted/15 border-b border-border flex items-center justify-between transition-colors">
         <div 
           className="flex items-center gap-2 cursor-pointer select-none flex-1"
           onClick={() => setIsExpanded(!isExpanded)}
@@ -90,12 +90,12 @@ export const TransfersWidget = () => {
             Transfers {totalActiveCount > 0 ? `(${totalActiveCount} active)` : ""}
           </span>
           {activeUploads.length > 0 && (
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-medium flex items-center gap-0.5">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 font-medium flex items-center gap-0.5 border border-blue-500/20">
               <ArrowUp className="w-2.5 h-2.5" /> {activeUploads.length}
             </span>
           )}
           {activeDownloads.length > 0 && (
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-0.5">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-0.5 border border-emerald-500/20">
               <ArrowDown className="w-2.5 h-2.5" /> {activeDownloads.length}
             </span>
           )}
@@ -161,12 +161,12 @@ export const TransfersWidget = () => {
               return (
                 <div
                   key={`${item.type}_${item.id}`}
-                  className="p-2.5 rounded-lg border border-border/70 bg-card hover:bg-accent/40 transition-colors"
+                  className="p-2.5 rounded-lg border border-border/60 bg-muted/15 hover:bg-muted/25 transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <div className="flex items-center gap-1.5 min-w-0 flex-1">
                       <span className={`p-1 rounded shrink-0 ${
-                        isUpload ? "bg-blue-100 dark:bg-blue-950 text-blue-600" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-600"
+                        isUpload ? "bg-blue-500/15 text-blue-600 dark:text-blue-400" : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                       }`}>
                         {isUpload ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
                       </span>
@@ -230,7 +230,7 @@ export const TransfersWidget = () => {
 
       {/* Footer Link to /transfers */}
       {isExpanded && (
-        <div className="p-2 bg-muted/40 border-t border-border flex items-center justify-center">
+        <div className="p-2 bg-card border-t border-border flex items-center justify-center">
           <Button
             variant="ghost"
             size="sm"
