@@ -19,9 +19,12 @@ from bson import ObjectId
 from src.Database import database
 from src.Config import OWNER, LOGS, MOVIE, GROUP, FILTER_CHAT
 import re
+import asyncio
+import glob
 from ..security.credentials import verify_credentials
 from ..modules.byte_streamer import ByteStreamer
 from ..modules.streaming_utils import parse_range_header, resolve_mime_type
+from ..modules.pipeline_uploader import upload_part_task
 from d4rk.Logs import setup_logger
 
 logger = setup_logger("webdav_routes")
@@ -1178,10 +1181,19 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
     current_part_file = os.path.join(tg_files_dir, f"dav_{upload_id}_part_{part_index}.tmp")
     current_part_written = 0
     total_written = 0
-    parts = []
-    first_thumbnail = None
-    first_media_unique_id = None
-    first_msg_id = None
+    upload_tasks: List[asyncio.Task] = []
+    disk_semaphore = asyncio.Semaphore(2)  # Max 2 parts buffered on VM disk (~3.9 GB cap)
+    await disk_semaphore.acquire()  # Acquire buffer slot for Part 1
+
+    # Categorize file type upfront
+    ext = file_name.split(".")[-1].lower() if "." in file_name else ""
+    file_type = "document"
+    if ext in ["mp4", "mkv", "avi", "mov", "webm", "ts", "3gp"]:
+        file_type = "video"
+    elif ext in ["jpg", "jpeg", "png", "gif", "webp"]:
+        file_type = "photo"
+    elif ext in ["mp3", "wav", "ogg", "flac", "m4a"]:
+        file_type = "audio"
 
     part_f = await aiofiles.open(current_part_file, "wb")
     try:
@@ -1196,38 +1208,34 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
 
                 await part_f.close()
 
-                # Upload this part immediately to Telegram
-                p_client = bot_manager.get_least_busy_client() or client
-                logger.info(f"[WEBDAV_PUT] Uploading part {part_index} ({current_part_written} bytes) for '{file_name}'...")
-                part_sent_msg = await p_client.send_document(
-                    chat_id=default_chat_id,
-                    document=current_part_file,
-                    caption=f"{file_name} (Part {part_index})",
-                    force_document=True
+                # Dispatch this part to Telegram in background (NON-BLOCKING!)
+                # While Telegram uploads this part, the HTTP loop immediately starts receiving the next part!
+                logger.info(
+                    f"[WEBDAV_PUT] Part {part_index} reached {current_part_written} bytes. "
+                    f"Dispatching to background Telegram uploader for '{file_name}'..."
                 )
-                p_media = part_sent_msg.document or part_sent_msg.video or part_sent_msg.audio or part_sent_msg.photo
-                if not first_thumbnail and hasattr(p_media, "thumbs") and p_media.thumbs:
-                    first_thumbnail = p_media.thumbs[0].file_id
-                if not first_media_unique_id and hasattr(p_media, "file_unique_id"):
-                    first_media_unique_id = p_media.file_unique_id
-                if first_msg_id is None:
-                    first_msg_id = part_sent_msg.id
+                p_task = asyncio.create_task(
+                    upload_part_task(
+                        part_file_path=current_part_file,
+                        part_index=part_index,
+                        file_name=file_name,
+                        start_byte=total_written - current_part_written,
+                        part_size=current_part_written,
+                        chat_id=default_chat_id,
+                        bot_manager=bot_manager,
+                        fallback_client=client,
+                        caption=f"{file_name} (Part {part_index})",
+                        semaphore=disk_semaphore,
+                        is_single_part=False,
+                        file_type=file_type
+                    )
+                )
+                upload_tasks.append(p_task)
 
-                parts.append({
-                    "part_index": part_index,
-                    "chat_id": default_chat_id,
-                    "message_id": part_sent_msg.id,
-                    "file_unique_id": getattr(p_media, "file_unique_id", f"part_{part_index}"),
-                    "part_size": current_part_written,
-                    "start_byte": total_written - current_part_written,
-                    "end_byte": total_written - 1
-                })
+                # Acquire buffer slot for next part (applies backpressure if 2 parts on disk)
+                await disk_semaphore.acquire()
 
-                # Delete completed part immediately from VM disk!
-                if os.path.exists(current_part_file):
-                    os.remove(current_part_file)
-
-                # Start next part file
+                # Immediately start receiving next part without waiting for Telegram upload!
                 part_index += 1
                 current_part_file = os.path.join(tg_files_dir, f"dav_{upload_id}_part_{part_index}.tmp")
                 part_f = await aiofiles.open(current_part_file, "wb")
@@ -1246,44 +1254,28 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
         await part_f.close()
 
         if total_written == 0:
+            disk_semaphore.release()
             if os.path.exists(current_part_file):
                 os.remove(current_part_file)
             raise HTTPException(status_code=400, detail="Cannot upload empty files")
 
-        # Categorize file type
-        ext = file_name.split(".")[-1].lower() if "." in file_name else ""
-        file_type = "document"
-        if ext in ["mp4", "mkv", "avi", "mov", "webm", "ts", "3gp"]:
-            file_type = "video"
-        elif ext in ["jpg", "jpeg", "png", "gif", "webp"]:
-            file_type = "photo"
-        elif ext in ["mp3", "wav", "ogg", "flac", "m4a"]:
-            file_type = "audio"
-
         # Case 1: Single-part file (<= 1950MB)
-        if len(parts) == 0:
+        if len(upload_tasks) == 0:
             logger.info(f"[WEBDAV_PUT] Uploading single part file '{file_name}' ({total_written} bytes)...")
-            p_client = bot_manager.get_least_busy_client() or client
-            msg = None
-            try:
-                if ext in ["jpg", "jpeg", "png", "gif", "webp"] and total_written <= 10 * 1024 * 1024:
-                    msg = await p_client.send_photo(chat_id=default_chat_id, photo=current_part_file, caption=f"WebDAV upload: {file_name}")
-                elif ext in ["mp4", "mkv", "avi", "mov", "webm"]:
-                    msg = await p_client.send_video(chat_id=default_chat_id, video=current_part_file, caption=f"WebDAV upload: {file_name}")
-                elif ext in ["mp3", "wav", "ogg", "flac", "m4a"]:
-                    msg = await p_client.send_audio(chat_id=default_chat_id, audio=current_part_file, caption=f"WebDAV upload: {file_name}")
-                else:
-                    msg = await p_client.send_document(chat_id=default_chat_id, document=current_part_file, caption=f"WebDAV upload: {file_name}", force_document=True)
-            except Exception as e:
-                logger.warning(f"Upload fallback to document: {e}")
-                msg = await p_client.send_document(chat_id=default_chat_id, document=current_part_file, caption=f"WebDAV upload: {file_name}", force_document=True)
-            finally:
-                if os.path.exists(current_part_file):
-                    os.remove(current_part_file)
-
-            media = msg.document or msg.video or msg.audio or msg.photo or msg.voice
-            file_unique_id = getattr(media, "file_unique_id", f"dav_{msg.id}")
-            thumbnail = media.thumbs[0].file_id if (hasattr(media, "thumbs") and media.thumbs) else None
+            res = await upload_part_task(
+                part_file_path=current_part_file,
+                part_index=1,
+                file_name=file_name,
+                start_byte=0,
+                part_size=total_written,
+                chat_id=default_chat_id,
+                bot_manager=bot_manager,
+                fallback_client=client,
+                caption=f"WebDAV upload: {file_name}",
+                semaphore=disk_semaphore,
+                is_single_part=True,
+                file_type=file_type
+            )
 
             existing = database.Files.find_one({
                 "file_name": file_name,
@@ -1296,10 +1288,10 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
                     {"_id": existing["_id"]},
                     {"$set": {
                         "chat_id": default_chat_id,
-                        "message_id": msg.id,
-                        "file_unique_id": file_unique_id,
+                        "message_id": res["message_id"],
+                        "file_unique_id": res["file_unique_id"],
                         "file_size": total_written,
-                        "thumbnail": thumbnail,
+                        "thumbnail": res["thumbnail"],
                         "file_type": file_type,
                         "parts": None,
                         "modified_date": datetime.now(timezone.utc).isoformat()
@@ -1308,10 +1300,10 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
             else:
                 database.Files.add_file(
                     chat_id=default_chat_id,
-                    message_id=msg.id,
-                    thumbnail=thumbnail,
+                    message_id=res["message_id"],
+                    thumbnail=res["thumbnail"],
                     file_type=file_type,
-                    file_unique_id=file_unique_id,
+                    file_unique_id=res["file_unique_id"],
                     file_size=total_written,
                     file_name=file_name,
                     file_caption=f"WebDAV upload: {file_name}",
@@ -1321,32 +1313,54 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
         else:
             # Case 2: Multi-part file (> 1950MB)
             if current_part_written > 0:
-                p_client = bot_manager.get_least_busy_client() or client
-                logger.info(f"[WEBDAV_PUT] Uploading final part {part_index} ({current_part_written} bytes) for '{file_name}'...")
-                part_sent_msg = await p_client.send_document(
-                    chat_id=default_chat_id,
-                    document=current_part_file,
-                    caption=f"{file_name} (Part {part_index}/{part_index})",
-                    force_document=True
+                logger.info(f"[WEBDAV_PUT] Dispatching final part {part_index} ({current_part_written} bytes) for '{file_name}'...")
+                final_task = asyncio.create_task(
+                    upload_part_task(
+                        part_file_path=current_part_file,
+                        part_index=part_index,
+                        file_name=file_name,
+                        start_byte=total_written - current_part_written,
+                        part_size=current_part_written,
+                        chat_id=default_chat_id,
+                        bot_manager=bot_manager,
+                        fallback_client=client,
+                        caption=f"{file_name} (Part {part_index}/{part_index})",
+                        semaphore=disk_semaphore,
+                        is_single_part=False,
+                        file_type=file_type
+                    )
                 )
-                p_media = part_sent_msg.document or part_sent_msg.video or part_sent_msg.audio or part_sent_msg.photo
-                if not first_thumbnail and hasattr(p_media, "thumbs") and p_media.thumbs:
-                    first_thumbnail = p_media.thumbs[0].file_id
-                if not first_media_unique_id and hasattr(p_media, "file_unique_id"):
-                    first_media_unique_id = p_media.file_unique_id
-
-                parts.append({
-                    "part_index": part_index,
-                    "chat_id": default_chat_id,
-                    "message_id": part_sent_msg.id,
-                    "file_unique_id": getattr(p_media, "file_unique_id", f"part_{part_index}"),
-                    "part_size": current_part_written,
-                    "start_byte": total_written - current_part_written,
-                    "end_byte": total_written - 1
-                })
-
+                upload_tasks.append(final_task)
+            else:
+                disk_semaphore.release()
                 if os.path.exists(current_part_file):
-                    os.remove(current_part_file)
+                    try:
+                        os.remove(current_part_file)
+                    except Exception:
+                        pass
+
+            # Wait for all background part uploads to complete
+            logger.info(f"[WEBDAV_PUT] Awaiting completion of {len(upload_tasks)} background upload part(s) for '{file_name}'...")
+            results = await asyncio.gather(*upload_tasks)
+            results.sort(key=lambda x: x["part_index"])
+
+            first_res = results[0]
+            first_msg_id = first_res["message_id"]
+            first_thumbnail = next((r["thumbnail"] for r in results if r.get("thumbnail")), None)
+            first_media_unique_id = first_res["file_unique_id"]
+
+            parts = [
+                {
+                    "part_index": r["part_index"],
+                    "chat_id": r["chat_id"],
+                    "message_id": r["message_id"],
+                    "file_unique_id": r["file_unique_id"],
+                    "part_size": r["part_size"],
+                    "start_byte": r["start_byte"],
+                    "end_byte": r["end_byte"]
+                }
+                for r in results
+            ]
 
             existing = database.Files.find_one({
                 "file_name": file_name,
@@ -1390,9 +1404,14 @@ async def handle_put(request: Request, segments: List[str], owner_id: str, defau
     finally:
         if 'part_f' in locals() and not part_f.closed:
             await part_f.close()
-        if os.path.exists(current_part_file):
+        # Cancel any unfinished tasks if an exception aborted the request
+        for t in upload_tasks:
+            if not t.done():
+                t.cancel()
+        # Clean up any leftover temporary files for this upload session
+        for tmp in glob.glob(os.path.join(tg_files_dir, f"dav_{upload_id}_part_*.tmp")):
             try:
-                os.remove(current_part_file)
+                os.remove(tmp)
             except Exception:
                 pass
 

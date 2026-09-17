@@ -18,6 +18,7 @@ from ..security.credentials import require_auth, User
 from .folders_routes import validate_folder_name
 from src.Database import database
 from d4rk.Logs import setup_logger
+from ..modules.pipeline_uploader import upload_part_task
 
 # For thumbnail route
 from pyrogram import Client
@@ -462,9 +463,18 @@ async def upload_file(
         current_part_file = os.path.join(tg_files_dir, f"{upload_id}_part_{part_index}.tmp")
         current_part_written = 0
         total_written = 0
-        parts = []
-        first_thumbnail = None
-        first_media_unique_id = None
+        upload_tasks: List[asyncio.Task] = []
+        disk_semaphore = asyncio.Semaphore(2)  # Max 2 active parts on VM disk
+        await disk_semaphore.acquire()
+
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        file_type = "document"
+        if file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.3gp', '.ogv']:
+            file_type = "video"
+        elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
+            file_type = "audio"
+        elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+            file_type = "photo"
         
         part_f = await aiofiles.open(current_part_file, 'wb')
         try:
@@ -481,37 +491,33 @@ async def upload_file(
                     
                     await part_f.close()
                     
-                    # Upload this part immediately to Telegram
-                    p_client = bot_manager.get_least_busy_client() or client
-                    logger.info(f"Uploading part {part_index} ({current_part_written} bytes) for '{file.filename}'...")
-                    
-                    part_sent_msg = await p_client.send_document(
-                        chat_id=chat_id,
-                        document=current_part_file,
-                        caption=f"{file.filename} (Part {part_index})",
-                        force_document=True
+                    # Dispatch to Telegram in background (NON-BLOCKING!)
+                    logger.info(
+                        f"[DIRECT_UPLOAD] Part {part_index} reached {current_part_written} bytes. "
+                        f"Dispatching background upload for '{file.filename}'..."
                     )
-                    p_media = part_sent_msg.document or part_sent_msg.video or part_sent_msg.audio or part_sent_msg.photo
-                    if not first_thumbnail and hasattr(p_media, 'thumbs') and p_media.thumbs:
-                        first_thumbnail = p_media.thumbs[0].file_id
-                    if not first_media_unique_id and hasattr(p_media, 'file_unique_id'):
-                        first_media_unique_id = p_media.file_unique_id
-                        
-                    parts.append({
-                        "part_index": part_index,
-                        "chat_id": chat_id,
-                        "message_id": part_sent_msg.id,
-                        "file_unique_id": p_media.file_unique_id,
-                        "part_size": current_part_written,
-                        "start_byte": total_written - current_part_written,
-                        "end_byte": total_written - 1
-                    })
+                    p_task = asyncio.create_task(
+                        upload_part_task(
+                            part_file_path=current_part_file,
+                            part_index=part_index,
+                            file_name=file.filename,
+                            start_byte=total_written - current_part_written,
+                            part_size=current_part_written,
+                            chat_id=chat_id,
+                            bot_manager=bot_manager,
+                            fallback_client=client,
+                            caption=f"{file.filename} (Part {part_index})",
+                            semaphore=disk_semaphore,
+                            is_single_part=False,
+                            file_type=file_type
+                        )
+                    )
+                    upload_tasks.append(p_task)
                     
-                    # Remove disk file immediately
-                    if os.path.exists(current_part_file):
-                        os.remove(current_part_file)
-                        
-                    # Start next part
+                    # Acquire next slot (applies backpressure if 2 parts on disk)
+                    await disk_semaphore.acquire()
+
+                    # Start next part immediately without pausing client upload!
                     part_index += 1
                     current_part_file = os.path.join(tg_files_dir, f"{upload_id}_part_{part_index}.tmp")
                     part_f = await aiofiles.open(current_part_file, 'wb')
@@ -531,61 +537,44 @@ async def upload_file(
         except Exception:
             if not part_f.closed:
                 await part_f.close()
+            for t in upload_tasks:
+                if not t.done():
+                    t.cancel()
             if os.path.exists(current_part_file):
                 os.remove(current_part_file)
             raise
 
         if total_written == 0:
+            disk_semaphore.release()
             if os.path.exists(current_part_file):
                 os.remove(current_part_file)
             raise HTTPException(status_code=400, detail="Cannot upload empty files")
 
-        file_extension = os.path.splitext(file.filename)[1].lower()
-        file_type = "document"
-        if file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.3gp', '.ogv']:
-            file_type = "video"
-        elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
-            file_type = "audio"
-        elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
-            file_type = "photo"
-
         # Case 1: Single-part file (<= 1950MB)
-        if len(parts) == 0:
+        if len(upload_tasks) == 0:
             logger.info(f"File '{file.filename}' ({total_written} bytes) fits in 1 Telegram message. Uploading...")
-            sent_message = None
-            try:
-                if file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'] and total_written <= 10 * 1024 * 1024:
-                    sent_message = await client.send_photo(chat_id=chat_id, photo=current_part_file, caption=f"Uploaded file: {file.filename}")
-                elif file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']:
-                    sent_message = await client.send_video(chat_id=chat_id, video=current_part_file, caption=f"Uploaded file: {file.filename}")
-                elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
-                    sent_message = await client.send_audio(chat_id=chat_id, audio=current_part_file, caption=f"Uploaded file: {file.filename}")
-                else:
-                    sent_message = await client.send_document(chat_id=chat_id, document=current_part_file, caption=f"Uploaded file: {file.filename}", force_document=True)
-            except Exception as e:
-                logger.warning(f"Upload failed as specific media, falling back to document: {e}")
-                sent_message = await client.send_document(chat_id=chat_id, document=current_part_file, caption=f"Uploaded file: {file.filename}", force_document=True)
-            finally:
-                if os.path.exists(current_part_file):
-                    os.remove(current_part_file)
-
-            if not sent_message:
-                raise HTTPException(status_code=500, detail="Failed to upload file to Telegram")
-
-            media = sent_message.document or sent_message.video or sent_message.audio or sent_message.photo or sent_message.voice
-            thumbnail = None
-            if hasattr(media, 'thumbs') and media.thumbs:
-                thumbnail = media.thumbs[0].file_id
-            elif hasattr(media, 'file_id') and sent_message.photo:
-                thumbnail = media.file_id
+            res = await upload_part_task(
+                part_file_path=current_part_file,
+                part_index=1,
+                file_name=file.filename,
+                start_byte=0,
+                part_size=total_written,
+                chat_id=chat_id,
+                bot_manager=bot_manager,
+                fallback_client=client,
+                caption=f"Uploaded file: {file.filename}",
+                semaphore=disk_semaphore,
+                is_single_part=True,
+                file_type=file_type
+            )
 
             success = database.Files.add_file(
-                chat_id=sent_message.chat.id,
-                message_id=sent_message.id,
-                thumbnail=thumbnail,
+                chat_id=chat_id,
+                message_id=res["message_id"],
+                thumbnail=res["thumbnail"],
                 file_type=file_type,
-                file_unique_id=media.file_unique_id,
-                file_size=media.file_size,
+                file_unique_id=res["file_unique_id"],
+                file_size=total_written,
                 file_name=file.filename,
                 file_caption=f"Uploaded file: {file.filename}",
                 file_path=path,
@@ -594,13 +583,13 @@ async def upload_file(
             return {
                 "message": "File uploaded successfully",
                 "file": {
-                    "id": str(sent_message.id),
-                    "file_unique_id": media.file_unique_id,
+                    "id": str(res["message_id"]),
+                    "file_unique_id": res["file_unique_id"],
                     "file_name": file.filename,
                     "file_path": path,
                     "file_type": file_type,
-                    "file_size": media.file_size,
-                    "thumbnail": thumbnail,
+                    "file_size": total_written,
+                    "thumbnail": res["thumbnail"],
                     "modified": datetime.datetime.now().isoformat()
                 }
             }
@@ -608,33 +597,56 @@ async def upload_file(
         # Case 2: Multi-part file (> 1950MB)
         else:
             if current_part_written > 0:
-                p_client = bot_manager.get_least_busy_client() or client
-                logger.info(f"Uploading final part {part_index} ({current_part_written} bytes) for '{file.filename}'...")
-                part_sent_msg = await p_client.send_document(
-                    chat_id=chat_id,
-                    document=current_part_file,
-                    caption=f"{file.filename} (Part {part_index}/{part_index})",
-                    force_document=True
+                logger.info(f"Dispatching final part {part_index} ({current_part_written} bytes) for '{file.filename}'...")
+                final_task = asyncio.create_task(
+                    upload_part_task(
+                        part_file_path=current_part_file,
+                        part_index=part_index,
+                        file_name=file.filename,
+                        start_byte=total_written - current_part_written,
+                        part_size=current_part_written,
+                        chat_id=chat_id,
+                        bot_manager=bot_manager,
+                        fallback_client=client,
+                        caption=f"{file.filename} (Part {part_index}/{part_index})",
+                        semaphore=disk_semaphore,
+                        is_single_part=False,
+                        file_type=file_type
+                    )
                 )
-                p_media = part_sent_msg.document or part_sent_msg.video or part_sent_msg.audio or part_sent_msg.photo
-                if not first_thumbnail and hasattr(p_media, 'thumbs') and p_media.thumbs:
-                    first_thumbnail = p_media.thumbs[0].file_id
-                if not first_media_unique_id and hasattr(p_media, 'file_unique_id'):
-                    first_media_unique_id = p_media.file_unique_id
-
-                parts.append({
-                    "part_index": part_index,
-                    "chat_id": chat_id,
-                    "message_id": part_sent_msg.id,
-                    "file_unique_id": p_media.file_unique_id,
-                    "part_size": current_part_written,
-                    "start_byte": total_written - current_part_written,
-                    "end_byte": total_written - 1
-                })
+                upload_tasks.append(final_task)
+            else:
+                disk_semaphore.release()
                 if os.path.exists(current_part_file):
-                    os.remove(current_part_file)
+                    try:
+                        os.remove(current_part_file)
+                    except Exception:
+                        pass
 
-            final_unique_id = first_media_unique_id or f"mp_{upload_id}"
+            # Await all background upload tasks
+            logger.info(f"[DIRECT_UPLOAD] Awaiting completion of {len(upload_tasks)} background upload part(s) for '{file.filename}'...")
+            results = await asyncio.gather(*upload_tasks)
+            results.sort(key=lambda x: x["part_index"])
+
+            first_res = results[0]
+            first_msg_id = first_res["message_id"]
+            first_thumbnail = next((r["thumbnail"] for r in results if r.get("thumbnail")), None)
+            first_unique_id = first_res["file_unique_id"]
+
+            parts = [
+                {
+                    "part_index": r["part_index"],
+                    "chat_id": r["chat_id"],
+                    "message_id": r["message_id"],
+                    "file_unique_id": r["file_unique_id"],
+                    "part_size": r["part_size"],
+                    "start_byte": r["start_byte"],
+                    "end_byte": r["end_byte"]
+                }
+                for r in results
+            ]
+
+            final_unique_id = first_unique_id or f"mp_{upload_id}"
             success = database.Files.add_multipart_file(
                 chat_id=chat_id,
                 thumbnail=first_thumbnail,
@@ -705,6 +717,9 @@ async def init_chunked_upload(
     tg_files_dir = os.path.join(os.getcwd(), "tg_files", f"chunk_{upload_id}")
     os.makedirs(tg_files_dir, exist_ok=True)
 
+    sem = asyncio.Semaphore(2)  # Max 2 active parts on VM disk
+    await sem.acquire()
+
     _active_upload_sessions[upload_id] = {
         "upload_id": upload_id,
         "filename": req.filename,
@@ -718,7 +733,9 @@ async def init_chunked_upload(
         "parts": [],
         "first_thumbnail": None,
         "first_unique_id": None,
-        "dir": tg_files_dir
+        "dir": tg_files_dir,
+        "upload_tasks": [],
+        "disk_semaphore": sem
     }
     logger.info(f"Initialized chunked upload {upload_id} for '{req.filename}' ({req.filesize} bytes)")
     return {
@@ -759,31 +776,42 @@ async def upload_file_chunk(
         client = bot_manager.get_least_busy_client() if bot_manager else None
 
         if chat_id and client:
-            logger.info(f"Chunked upload {upload_id}: Part {part_idx} reached {session['current_part_written']} bytes. Uploading to Telegram...")
-            sent_msg = await client.send_document(
-                chat_id=chat_id,
-                document=part_file_path,
-                caption=f"{session['filename']} (Part {part_idx})",
-                force_document=True
+            file_extension = os.path.splitext(session["filename"])[1].lower()
+            file_type = "document"
+            if file_extension in ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv']:
+                file_type = "video"
+            elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
+                file_type = "audio"
+            elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+                file_type = "photo"
+
+            logger.info(
+                f"[CHUNKED_UPLOAD] Session {upload_id}: Part {part_idx} reached {session['current_part_written']} bytes. "
+                f"Dispatching non-blocking background upload for '{session['filename']}'..."
             )
-            media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo
-            if not session["first_thumbnail"] and hasattr(media, 'thumbs') and media.thumbs:
-                session["first_thumbnail"] = media.thumbs[0].file_id
-            if not session["first_unique_id"] and hasattr(media, 'file_unique_id'):
-                session["first_unique_id"] = media.file_unique_id
+            # Dispatch background task without blocking the HTTP request!
+            # The browser receives HTTP 200 OK immediately and continues uploading next chunks without freezing!
+            task = asyncio.create_task(
+                upload_part_task(
+                    part_file_path=part_file_path,
+                    part_index=part_idx,
+                    file_name=session["filename"],
+                    start_byte=session["total_written"] - session["current_part_written"],
+                    part_size=session["current_part_written"],
+                    chat_id=chat_id,
+                    bot_manager=bot_manager,
+                    fallback_client=client,
+                    caption=f"{session['filename']} (Part {part_idx})",
+                    semaphore=session.get("disk_semaphore"),
+                    is_single_part=False,
+                    file_type=file_type
+                )
+            )
+            session.setdefault("upload_tasks", []).append(task)
 
-            session["parts"].append({
-                "part_index": part_idx,
-                "chat_id": chat_id,
-                "message_id": sent_msg.id,
-                "file_unique_id": media.file_unique_id,
-                "part_size": session["current_part_written"],
-                "start_byte": session["total_written"] - session["current_part_written"],
-                "end_byte": session["total_written"] - 1
-            })
-
-            if os.path.exists(part_file_path):
-                os.remove(part_file_path)
+            # Acquire permit for next part buffer (applies backpressure if 2 parts already on disk)
+            if "disk_semaphore" in session:
+                await session["disk_semaphore"].acquire()
 
             session["current_part_index"] += 1
             session["current_part_written"] = 0
@@ -792,7 +820,7 @@ async def upload_file_chunk(
         "status": "ok",
         "chunk_index": chunk_index,
         "total_written": session["total_written"],
-        "parts_uploaded": len(session["parts"])
+        "parts_uploaded": len(session.get("upload_tasks", []))
     }
 
 async def _process_upload_completion(upload_id: str, session: dict, bot_manager, chat_id: int):
@@ -816,42 +844,37 @@ async def _process_upload_completion(upload_id: str, session: dict, bot_manager,
         elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
             file_type = "photo"
 
-        if len(session["parts"]) == 0:
-            if not os.path.exists(part_file_path):
+        upload_tasks = session.get("upload_tasks", [])
+
+        # Case 1: Single-part file (<= 1950MB) - no background tasks were spawned
+        if len(upload_tasks) == 0:
+            if not os.path.exists(part_file_path) or session["total_written"] == 0:
                 session["status"] = "error"
                 session["error"] = "No file chunks received"
                 return
 
-            logger.info(f"Uploading file '{session['filename']}' ({session['total_written']} bytes) to Telegram chat {chat_id}...")
-            try:
-                if file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'] and session["total_written"] <= 10 * 1024 * 1024:
-                    sent_msg = await client.send_photo(chat_id=chat_id, photo=part_file_path, caption=f"Uploaded file: {session['filename']}")
-                elif file_extension in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']:
-                    sent_msg = await client.send_video(chat_id=chat_id, video=part_file_path, caption=f"Uploaded file: {session['filename']}")
-                elif file_extension in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
-                    sent_msg = await client.send_audio(chat_id=chat_id, audio=part_file_path, caption=f"Uploaded file: {session['filename']}")
-                else:
-                    sent_msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=f"Uploaded file: {session['filename']}", force_document=True)
-            except Exception as ex:
-                logger.warning(f"Fallback upload as document: {ex}")
-                sent_msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=f"Uploaded file: {session['filename']}", force_document=True)
-            finally:
-                if os.path.exists(part_file_path):
-                    os.remove(part_file_path)
-
-            media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo or sent_msg.voice
-            thumbnail = None
-            if hasattr(media, 'thumbs') and media.thumbs:
-                thumbnail = media.thumbs[0].file_id
-            elif hasattr(media, 'file_id') and sent_msg.photo:
-                thumbnail = media.file_id
+            logger.info(f"Uploading single-part file '{session['filename']}' ({session['total_written']} bytes) to Telegram chat {chat_id}...")
+            res = await upload_part_task(
+                part_file_path=part_file_path,
+                part_index=1,
+                file_name=session["filename"],
+                start_byte=0,
+                part_size=session["total_written"],
+                chat_id=chat_id,
+                bot_manager=bot_manager,
+                fallback_client=client,
+                caption=f"Uploaded file: {session['filename']}",
+                semaphore=session.get("disk_semaphore"),
+                is_single_part=True,
+                file_type=file_type
+            )
 
             database.Files.add_file(
                 chat_id=chat_id,
-                message_id=sent_msg.id,
-                thumbnail=thumbnail,
+                message_id=res["message_id"],
+                thumbnail=res["thumbnail"],
                 file_type=file_type,
-                file_unique_id=media.file_unique_id,
+                file_unique_id=res["file_unique_id"],
                 file_size=session["total_written"],
                 file_name=session["filename"],
                 file_caption=f"Uploaded file: {session['filename']}",
@@ -863,54 +886,80 @@ async def _process_upload_completion(upload_id: str, session: dict, bot_manager,
 
             session["status"] = "completed"
             session["result_file"] = {
-                "id": str(sent_msg.id),
-                "file_unique_id": media.file_unique_id,
+                "id": str(res["message_id"]),
+                "file_unique_id": res["file_unique_id"],
                 "file_name": session["filename"],
                 "file_path": session["path"],
                 "file_type": file_type,
                 "file_size": session["total_written"],
-                "thumbnail": thumbnail,
+                "thumbnail": res["thumbnail"],
                 "modified": datetime.datetime.now().isoformat()
             }
             session["result_message"] = "File uploaded successfully"
             logger.info(f"Chunked upload {upload_id} for '{session['filename']}' completed successfully.")
         else:
+            # Case 2: Multi-part file (> 1950MB)
             if os.path.exists(part_file_path) and session["current_part_written"] > 0:
-                logger.info(f"Uploading final part {part_idx} ({session['current_part_written']} bytes)...")
-                sent_msg = await client.send_document(
-                    chat_id=chat_id,
-                    document=part_file_path,
-                    caption=f"{session['filename']} (Part {part_idx}/{part_idx})",
-                    force_document=True
+                logger.info(f"Dispatching final part {part_idx} ({session['current_part_written']} bytes)...")
+                final_task = asyncio.create_task(
+                    upload_part_task(
+                        part_file_path=part_file_path,
+                        part_index=part_idx,
+                        file_name=session["filename"],
+                        start_byte=session["total_written"] - session["current_part_written"],
+                        part_size=session["current_part_written"],
+                        chat_id=chat_id,
+                        bot_manager=bot_manager,
+                        fallback_client=client,
+                        caption=f"{session['filename']} (Part {part_idx}/{part_idx})",
+                        semaphore=session.get("disk_semaphore"),
+                        is_single_part=False,
+                        file_type=file_type
+                    )
                 )
-                media = sent_msg.document or sent_msg.video or sent_msg.audio or sent_msg.photo
-                if not session["first_thumbnail"] and hasattr(media, 'thumbs') and media.thumbs:
-                    session["first_thumbnail"] = media.thumbs[0].file_id
-                if not session["first_unique_id"] and hasattr(media, 'file_unique_id'):
-                    session["first_unique_id"] = media.file_unique_id
-
-                session["parts"].append({
-                    "part_index": part_idx,
-                    "chat_id": chat_id,
-                    "message_id": sent_msg.id,
-                    "file_unique_id": media.file_unique_id,
-                    "part_size": session["current_part_written"],
-                    "start_byte": session["total_written"] - session["current_part_written"],
-                    "end_byte": session["total_written"] - 1
-                })
+                upload_tasks.append(final_task)
+            else:
+                if "disk_semaphore" in session:
+                    session["disk_semaphore"].release()
                 if os.path.exists(part_file_path):
-                    os.remove(part_file_path)
+                    try:
+                        os.remove(part_file_path)
+                    except Exception:
+                        pass
 
-            final_unique_id = session["first_unique_id"] or f"mp_{upload_id}"
+            # Await all background upload tasks
+            logger.info(f"[CHUNKED_UPLOAD] Awaiting completion of {len(upload_tasks)} background upload part(s) for '{session['filename']}'...")
+            results = await asyncio.gather(*upload_tasks)
+            results.sort(key=lambda x: x["part_index"])
+
+            first_res = results[0]
+            first_msg_id = first_res["message_id"]
+            first_thumbnail = next((r["thumbnail"] for r in results if r.get("thumbnail")), None)
+            first_unique_id = first_res["file_unique_id"]
+
+            parts = [
+                {
+                    "part_index": r["part_index"],
+                    "chat_id": r["chat_id"],
+                    "message_id": r["message_id"],
+                    "file_unique_id": r["file_unique_id"],
+                    "part_size": r["part_size"],
+                    "start_byte": r["start_byte"],
+                    "end_byte": r["end_byte"]
+                }
+                for r in results
+            ]
+
+            final_unique_id = first_unique_id or f"mp_{upload_id}"
             database.Files.add_multipart_file(
                 chat_id=chat_id,
-                thumbnail=session["first_thumbnail"],
+                thumbnail=first_thumbnail,
                 file_type=file_type,
                 file_unique_id=final_unique_id,
                 file_size=session["total_written"],
                 file_name=session["filename"],
                 file_caption=f"Uploaded multi-part file: {session['filename']}",
-                parts=session["parts"],
+                parts=parts,
                 file_path=session["path"],
                 owner_id=session["user_id"],
                 part_size=1950 * 1024 * 1024
@@ -920,18 +969,18 @@ async def _process_upload_completion(upload_id: str, session: dict, bot_manager,
 
             session["status"] = "completed"
             session["result_file"] = {
-                "id": str(session["parts"][0]["message_id"]),
+                "id": str(parts[0]["message_id"]),
                 "file_unique_id": final_unique_id,
                 "file_name": session["filename"],
                 "file_path": session["path"],
                 "file_type": file_type,
                 "file_size": session["total_written"],
-                "thumbnail": session["first_thumbnail"],
+                "thumbnail": first_thumbnail,
                 "is_split": True,
-                "total_parts": len(session["parts"]),
+                "total_parts": len(parts),
                 "modified": datetime.datetime.now().isoformat()
             }
-            session["result_message"] = f"Multi-part file uploaded successfully ({len(session['parts'])} parts)"
+            session["result_message"] = f"Multi-part file uploaded successfully ({len(parts)} parts)"
             logger.info(f"Chunked multi-part upload {upload_id} for '{session['filename']}' completed successfully.")
     except Exception as e:
         logger.error(f"Error processing upload completion {upload_id}: {e}", exc_info=True)
