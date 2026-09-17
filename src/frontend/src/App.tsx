@@ -11,6 +11,7 @@ import TestDownload from "./pages/TestDownload";
 import Downloads from "./pages/Downloads";
 import { NavigationSidebar } from "@/components/NavigationSidebar";
 import { AuthWrapper } from "@/components/AuthWrapper";
+import { TransfersWidget } from "@/components/TransfersWidget";
 // Remove the import for DownloadQueue since we're moving it to the FileExplorer
 import logger from "@/lib/logger";
 // Import the new backend connection hook
@@ -39,6 +40,7 @@ const AppRoutes = () => {
         <Route path="/settings" element={<Index />} />
         <Route path="/profile" element={<Index />} />
         <Route path="/downloads" element={<Index />} />
+        <Route path="/transfers" element={<Index />} />
         <Route path="/storage" element={<Index />} />
         <Route path="/users" element={<Index />} />
         <Route path="/" element={<Index />} />
@@ -106,7 +108,7 @@ const App = () => {
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
                 <AppRoutes />
                 <Toaster />
-                {/* Remove the floating DownloadQueue component */}
+                <TransfersWidget />
               </div>
             </div>
           </BrowserRouter>

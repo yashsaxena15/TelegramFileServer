@@ -5,7 +5,7 @@ export interface DownloadItem {
   id: string;
   url: string;
   filename: string;
-  status: 'queued' | 'downloading' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   size?: number;
   downloaded?: number;
@@ -72,12 +72,49 @@ export class DownloadManager {
     return id;
   }
 
+  // Pause a download
+  pauseDownload(id: string) {
+    const download = this.downloads.get(id);
+    if (!download) return;
+
+    if (download.status === 'downloading') {
+      download.status = 'paused';
+      if (download.cancellationToken) {
+        download.cancellationToken.abort();
+      }
+      this.activeDownloads.delete(id);
+      logger.info('[DownloadManager] Paused download', { id });
+    } else if (download.status === 'queued') {
+      this.queue = this.queue.filter(itemId => itemId !== id);
+      download.status = 'paused';
+    }
+
+    this.notifyListeners();
+    this.processQueue();
+  }
+
+  // Resume a paused download
+  resumeDownload(id: string) {
+    const download = this.downloads.get(id);
+    if (!download || download.status !== 'paused') return;
+
+    download.status = 'queued';
+    download.error = undefined;
+    if (!this.queue.includes(id)) {
+      this.queue.push(id);
+    }
+
+    logger.info('[DownloadManager] Resumed download', { id });
+    this.notifyListeners();
+    this.processQueue();
+  }
+
   // Cancel a download
   cancelDownload(id: string) {
     const download = this.downloads.get(id);
     if (!download) return;
     
-    if (download.status === 'downloading') {
+    if (download.status === 'downloading' || download.status === 'paused') {
       // Trigger cancellation if we have a cancellationToken
       if (download.cancellationToken) {
         download.cancellationToken.abort();
@@ -98,6 +135,31 @@ export class DownloadManager {
     this.processQueue();
     
     logger.info('[DownloadManager] Cancelled download', { id });
+  }
+
+  // Bulk controls
+  pauseAll() {
+    this.downloads.forEach(d => {
+      if (d.status === 'downloading' || d.status === 'queued') {
+        this.pauseDownload(d.id);
+      }
+    });
+  }
+
+  resumeAll() {
+    this.downloads.forEach(d => {
+      if (d.status === 'paused') {
+        this.resumeDownload(d.id);
+      }
+    });
+  }
+
+  cancelAll() {
+    this.downloads.forEach(d => {
+      if (d.status === 'downloading' || d.status === 'queued' || d.status === 'paused') {
+        this.cancelDownload(d.id);
+      }
+    });
   }
 
   // Process the download queue
@@ -188,8 +250,11 @@ export class DownloadManager {
         this.notifyListeners();
       }, 3, cancellationToken);
       
-      // Check if download was cancelled before completion
+      // Check if download was cancelled or paused
       if (cancellationToken.signal.aborted) {
+        if (download.status === 'paused') {
+          return;
+        }
         download.status = 'cancelled';
         download.endTime = new Date();
         logger.info('[DownloadManager] Download cancelled before completion', { id });
@@ -211,8 +276,12 @@ export class DownloadManager {
       
       logger.info('[DownloadManager] Download completed', { id });
     } catch (error) {
+      if (download.status === 'paused') {
+        return;
+      }
       // Check if this is a cancellation error
       if (error instanceof Error && error.name === 'AbortError') {
+        if (download.status === 'paused') return;
         download.status = 'cancelled';
         download.endTime = new Date();
         logger.info('[DownloadManager] Download cancelled', { id });

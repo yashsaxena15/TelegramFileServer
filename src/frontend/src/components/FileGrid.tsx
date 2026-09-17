@@ -13,6 +13,7 @@ import { ArchiveInspectDialog } from "./ArchiveInspectDialog";
 import { CompressDialog } from "./CompressDialog";
 import { UploadProgressWidget, FileUploadStatus } from "./UploadProgressWidget";
 import { FloatingUploadButton } from "./FloatingUploadButton"; // Add this import
+import { uploadManager } from "@/lib/uploadManager";
 import { TelegramVerificationDialog } from "./TelegramVerificationDialog";
 import { IndexChatDialog } from "./IndexChatDialog"; // Add this import
 import { PropertiesDialog } from "./PropertiesDialog";
@@ -169,8 +170,28 @@ export const FileGrid = ({
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [uploadProgressMap]);
+
+  // Listen for uploadCompleted events from UploadManager to refresh grid
+  useEffect(() => {
+    const handleUploadDone = (e: any) => {
+      if (onRefresh) onRefresh();
+      if (e.detail?.file && onFileUploaded) {
+        onFileUploaded(e.detail.file as unknown as FileItem);
+      }
+    };
+    const handleTgNotVerified = () => setShowTelegramVerificationDialog(true);
+    const handleIndexChatNotFound = () => setShowIndexChatDialog(true);
+
+    window.addEventListener("uploadCompleted", handleUploadDone);
+    window.addEventListener("telegramNotVerified", handleTgNotVerified);
+    window.addEventListener("indexChatNotFound", handleIndexChatNotFound);
+    return () => {
+      window.removeEventListener("uploadCompleted", handleUploadDone);
+      window.removeEventListener("telegramNotVerified", handleTgNotVerified);
+      window.removeEventListener("indexChatNotFound", handleIndexChatNotFound);
+    };
+  }, [onRefresh, onFileUploaded]);
 
   // Keyboard shortcuts: Escape to clear selection, Ctrl+A / Cmd+A to select all, Alt+Enter for Properties
   useEffect(() => {
@@ -983,11 +1004,12 @@ export const FileGrid = ({
         }
       }
       
-      // Initialize real upload progress tracking map
-      const initialProgressMap: Record<string, FileUploadStatus> = {};
+      // Queue files into uploadManager
+      let addedCount = 0;
       validFiles.forEach((fileObj) => {
         let file: File;
         let fullPath: string | undefined;
+        
         if ('file' in fileObj && fileObj.file instanceof File) {
           file = fileObj.file;
           fullPath = fileObj.fullPath;
@@ -999,45 +1021,9 @@ export const FileGrid = ({
         } else {
           return;
         }
-        const key = fullPath || file.name;
-        initialProgressMap[key] = {
-          fileName: file.name,
-          filePath: key,
-          progress: 0,
-          status: 'uploading',
-          loaded: 0,
-          total: file.size,
-        };
-      });
-      setUploadProgressMap(initialProgressMap);
-
-      // Upload each file with correct path structure
-      const uploadPromises = validFiles.map(async (fileObj) => {
-        let file: File;
-        let fullPath: string | undefined;
         
-        if ('file' in fileObj && fileObj.file instanceof File) {
-          // TraversedFile object
-          file = fileObj.file;
-          fullPath = fileObj.fullPath;
-        } else if (fileObj instanceof File) {
-          // Regular File object
-          file = fileObj;
-          // Check for webkitRelativePath in regular File objects too
-          if ('webkitRelativePath' in fileObj && (fileObj as any).webkitRelativePath) {
-            fullPath = (fileObj as any).webkitRelativePath;
-          }
-        } else {
-          throw new Error('Invalid file object');
-        }
-        
-        const fileKey = fullPath || file.name;
-
-        // For folder uploads, we need to construct the correct path
+        // For folder uploads, construct the correct path
         let uploadPath = currentPathStr;
-        // If we have a full path structure (e.g., "qwes/subfolder/file.txt"), we need to:
-        // 1. Extract the folder structure relative to the dropped folder
-        // 2. Append it to the current path
         if (fullPath && fullPath.includes('/')) {
           const pathParts = fullPath.split('/');
           if (pathParts.length >= 1) {
@@ -1053,77 +1039,18 @@ export const FileGrid = ({
               uploadPath = `${cleanCurrentPath}/${folderPathRelative}`;
             }
           }
-        }        
-        
-        try {
-          // Upload the file with real progress updates
-          const result = await api.uploadFile(file, uploadPath, (percent, loaded, total, speed, eta) => {
-            setUploadProgressMap(prev => ({
-              ...prev,
-              [fileKey]: {
-                fileName: file.name,
-                filePath: fileKey,
-                progress: percent,
-                status: 'uploading',
-                loaded,
-                total,
-                speed,
-                eta,
-              }
-            }));
-          });
-
-          // Mark file as completed
-          setUploadProgressMap(prev => ({
-            ...prev,
-            [fileKey]: {
-              fileName: file.name,
-              filePath: fileKey,
-              progress: 100,
-              status: 'completed',
-              loaded: file.size,
-              total: file.size,
-            }
-          }));
-
-          if (onFileUploaded && result && result.file) {
-            onFileUploaded(result.file as unknown as FileItem);
-          }
-
-          return result;
-        } catch (error: any) {
-          const errorMessage = error?.message || 'Upload failed';
-          setUploadProgressMap(prev => ({
-            ...prev,
-            [fileKey]: {
-              fileName: file.name,
-              filePath: fileKey,
-              progress: prev[fileKey]?.progress || 0,
-              status: 'failed',
-              error: errorMessage,
-              loaded: prev[fileKey]?.loaded || 0,
-              total: file.size,
-            }
-          }));
-          throw error;
         }
+        
+        uploadManager.addUpload(file, uploadPath);
+        addedCount++;
       });
       
-      // Wait for all uploads to finish (completed or rejected)
-      const results = await Promise.allSettled(uploadPromises);
-      
-      // Check for specific dialog errors
-      const rejectedResult = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
-      if (rejectedResult) {
-        const errorReason = rejectedResult.reason;
-        const msg = errorReason?.message || '';
-        if (msg.includes('TELEGRAM_NOT_VERIFIED')) {
-          setShowTelegramVerificationDialog(true);
-        } else if (msg.includes('User index chat not found')) {
-          setShowIndexChatDialog(true);
-        }
+      if (addedCount > 0) {
+        toast.success(`Added ${addedCount} file${addedCount > 1 ? 's' : ''} to Transfers`);
       }
-
+      
+      setUploadingFiles(null);
+      setUploadProgressMap({});
     } catch (error: any) {
       console.error('Upload process error:', error);
       if (error?.message?.includes('TELEGRAM_NOT_VERIFIED')) {
@@ -2196,6 +2123,7 @@ export const FileGrid = ({
         <FloatingUploadButton
           onUploadFiles={onUploadFiles}
           onUploadFolder={onUploadFolder}
+          onCreateFolder={onNewFolder}
         />
       )}
 

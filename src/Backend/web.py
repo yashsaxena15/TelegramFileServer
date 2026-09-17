@@ -48,7 +48,7 @@ from src.Database import database
 from dataclasses import asdict
 
 # Import utility functions and global variables
-from .modules.utilities import work_loads, _auth_tokens, load_persistent_tokens
+from .modules.utilities import work_loads, _auth_tokens, load_persistent_tokens, cleanup_stale_upload_files
 
 app = FastAPI(
     title=f"{APP_NAME} Media Server",
@@ -60,6 +60,21 @@ app = FastAPI(
 async def startup_event():
     load_persistent_tokens(app)
     
+    # Run startup cleanup for any stale upload files (> 5 minutes old from previous crashes)
+    cleanup_stale_upload_files(max_age_seconds=300)
+
+    # Start periodic janitor background task (runs every 15 minutes)
+    import asyncio
+    async def periodic_upload_janitor():
+        while True:
+            await asyncio.sleep(900)  # 15 minutes
+            try:
+                cleanup_stale_upload_files(max_age_seconds=3600)
+            except Exception as e:
+                logger.error(f"Error in periodic_upload_janitor: {e}")
+
+    asyncio.create_task(periodic_upload_janitor())
+
     # Ensure admin user has telegram_user_id set to match OWNER env var
     if OWNER is not None:
         try:

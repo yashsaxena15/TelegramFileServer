@@ -29,7 +29,7 @@ import { StorageAnalyticsContent } from "./StorageAnalyticsContent";
 import { ProfileContent } from "./ProfileContent";
 import { SettingsContent } from "./SettingsContent";
 import { UserManagementContent } from "./UserManagementContent";
-import Downloads from "@/pages/Downloads";
+import Transfers from "@/pages/Transfers";
 import { getApiBaseUrl, resetApiBaseUrl, updateApiBaseUrl, fetchWithTimeout, api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -97,7 +97,9 @@ export const FileExplorer = () => {
   const [showSettings, setShowSettings] = useState(() => window.location.pathname === '/settings');
   const [showUserManagement, setShowUserManagement] = useState(() => window.location.pathname === '/users');
   const [showStorageAnalytics, setShowStorageAnalytics] = useState(() => window.location.pathname === '/storage');
-  const [showDownloads, setShowDownloads] = useState(() => window.location.pathname === '/downloads');
+  const [showTransfers, setShowTransfers] = useState(() => window.location.pathname === '/transfers' || window.location.pathname === '/downloads');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [emptyTrashDialogOpen, setEmptyTrashDialogOpen] = useState(false); // State to confirm empty trash
   const [isEmptyingTrash, setIsEmptyingTrash] = useState(false);
   const [showDownloadQueue, setShowDownloadQueue] = useState(false); // State to track if download queue should be shown
@@ -212,7 +214,7 @@ export const FileExplorer = () => {
       setShowSettings(p === '/settings');
       setShowUserManagement(p === '/users');
       setShowStorageAnalytics(p === '/storage');
-      setShowDownloads(p === '/downloads');
+      setShowTransfers(p === '/transfers' || p === '/downloads');
     };
     
     window.addEventListener('popstate', handlePopState);
@@ -226,7 +228,7 @@ export const FileExplorer = () => {
     setShowSettings(p === '/settings');
     setShowUserManagement(p === '/users');
     setShowStorageAnalytics(p === '/storage');
-    setShowDownloads(p === '/downloads');
+    setShowTransfers(p === '/transfers' || p === '/downloads');
   }, [location.pathname]);
 
   // Log when the component mounts
@@ -332,30 +334,32 @@ export const FileExplorer = () => {
     };
   }, []);
 
-  // Listen for showDownloads event
+  // Listen for showTransfers and showDownloads events
   useEffect(() => {
-    const handleShowDownloads = () => {
-      setShowDownloads(true);
+    const handleShowTransfers = () => {
+      setShowTransfers(true);
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
       setShowStorageAnalytics(false);
     };
 
-    window.addEventListener('showDownloads', handleShowDownloads);
+    window.addEventListener('showTransfers', handleShowTransfers);
+    window.addEventListener('showDownloads', handleShowTransfers);
     return () => {
-      window.removeEventListener('showDownloads', handleShowDownloads);
+      window.removeEventListener('showTransfers', handleShowTransfers);
+      window.removeEventListener('showDownloads', handleShowTransfers);
     };
   }, []);
 
-  // Listen for showFiles event (when closing profile/settings/user management/storage/downloads)
+  // Listen for showFiles event (when closing profile/settings/user management/storage/transfers)
   useEffect(() => {
     const handleShowFiles = () => {
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
       setShowStorageAnalytics(false);
-      setShowDownloads(false);
+      setShowTransfers(false);
       
       // Reset currentPath to Home when returning to file view
       setCurrentPath(["Home"]);
@@ -987,55 +991,55 @@ export const FileExplorer = () => {
     return () => window.removeEventListener('changeCategory', handleCategoryChange as EventListener);
   }, []);
 
-  const activeView: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'downloads' = 
+  const activeView: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'transfers' | 'downloads' = 
     showProfile ? 'profile' :
     showSettings ? 'settings' :
     showUserManagement ? 'users' :
     showStorageAnalytics ? 'storage' :
-    showDownloads ? 'downloads' : 'files';
+    showTransfers ? 'transfers' : 'files';
 
-  const handleNavigateView = (view: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'downloads', filter?: string) => {
+  const handleNavigateView = (view: 'files' | 'profile' | 'settings' | 'users' | 'storage' | 'transfers' | 'downloads', filter?: string) => {
     if (view === 'profile') {
       setShowProfile(true);
       setShowSettings(false);
       setShowUserManagement(false);
       setShowStorageAnalytics(false);
-      setShowDownloads(false);
+      setShowTransfers(false);
       navigate('/profile');
     } else if (view === 'settings') {
       setShowSettings(true);
       setShowProfile(false);
       setShowUserManagement(false);
       setShowStorageAnalytics(false);
-      setShowDownloads(false);
+      setShowTransfers(false);
       navigate('/settings');
     } else if (view === 'users') {
       setShowUserManagement(true);
       setShowProfile(false);
       setShowSettings(false);
       setShowStorageAnalytics(false);
-      setShowDownloads(false);
+      setShowTransfers(false);
       navigate('/users');
     } else if (view === 'storage') {
       setShowStorageAnalytics(true);
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
-      setShowDownloads(false);
+      setShowTransfers(false);
       navigate('/storage');
-    } else if (view === 'downloads') {
-      setShowDownloads(true);
+    } else if (view === 'transfers' || view === 'downloads') {
+      setShowTransfers(true);
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
       setShowStorageAnalytics(false);
-      navigate('/downloads');
+      navigate('/transfers');
     } else {
       setShowProfile(false);
       setShowSettings(false);
       setShowUserManagement(false);
       setShowStorageAnalytics(false);
-      setShowDownloads(false);
+      setShowTransfers(false);
       navigate('/');
       if (filter) {
         handleFilterChange(filter);
@@ -1054,6 +1058,11 @@ export const FileExplorer = () => {
         activeView={activeView}
         onNavigateView={handleNavigateView}
         onOpenWebDAV={() => setShowWebDAVDialog(true)}
+        isCollapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+        onNewFolder={() => setNewFolderDialogOpen(true)}
+        mobileOpen={mobileDrawerOpen}
+        onCloseMobile={() => setMobileDrawerOpen(false)}
       />
 
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -1120,16 +1129,16 @@ export const FileExplorer = () => {
               }}
             />
           </motion.div>
-        ) : showDownloads ? (
+        ) : showTransfers ? (
           <motion.div
-            key="downloads"
+            key="transfers"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.3 }}
             className="flex-1 flex flex-col h-full min-h-0 overflow-hidden"
           >
-            <Downloads />
+            <Transfers />
           </motion.div>
         ) : (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -1142,6 +1151,13 @@ export const FileExplorer = () => {
               onBack={() => window.history.back()}
               onRefresh={refetch}
               onBreadcrumbClick={handleBreadcrumbClick}
+              onToggleSidebar={() => {
+                if (window.innerWidth < 768) {
+                  setMobileDrawerOpen(prev => !prev);
+                } else {
+                  setSidebarCollapsed(prev => !prev);
+                }
+              }}
               sortField={sortField}
               sortOrder={sortOrder}
               foldersFirst={foldersFirst}

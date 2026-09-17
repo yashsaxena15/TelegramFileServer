@@ -29,8 +29,38 @@ def load_persistent_tokens(app):
             }
             loaded_count += 1
         
-        logger.info(f"Loaded {loaded_count} persistent auth tokens from database")
     except Exception as e:
         logger.error(f"Failed to load persistent auth tokens: {e}")
 
-__all__ = ['work_loads', '_auth_tokens', 'load_persistent_tokens']
+def cleanup_stale_upload_files(max_age_seconds: int = 3600):
+    """
+    Purges any temporary upload directories (chunk_*) or files (dav_*, *.tmp)
+    in tg_files/ that are older than max_age_seconds or abandoned.
+    """
+    import os
+    import time
+    import shutil
+
+    tg_files_dir = os.path.join(os.getcwd(), "tg_files")
+    if not os.path.exists(tg_files_dir):
+        return
+
+    now = time.time()
+    try:
+        for entry in os.listdir(tg_files_dir):
+            entry_path = os.path.join(tg_files_dir, entry)
+            try:
+                mtime = os.path.getmtime(entry_path)
+                if now - mtime >= max_age_seconds:
+                    if os.path.isdir(entry_path):
+                        shutil.rmtree(entry_path, ignore_errors=True)
+                        logger.info(f"[JANITOR] Cleaned up stale upload directory: {entry}")
+                    else:
+                        os.remove(entry_path)
+                        logger.info(f"[JANITOR] Cleaned up stale upload file: {entry}")
+            except Exception as e:
+                logger.warning(f"[JANITOR] Failed to clean {entry_path}: {e}")
+    except Exception as e:
+        logger.error(f"[JANITOR] Error during tg_files cleanup: {e}")
+
+__all__ = ['work_loads', '_auth_tokens', 'load_persistent_tokens', 'cleanup_stale_upload_files']

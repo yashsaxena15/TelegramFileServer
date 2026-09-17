@@ -11,6 +11,7 @@ import {
   SlidersHorizontal,
   Check,
   RotateCcw,
+  PanelLeft,
 } from "lucide-react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
@@ -64,6 +65,7 @@ interface TopBarProps {
   totalCount?: number;
   filteredCount?: number;
   isInboxMode?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const TopBar = ({
@@ -91,6 +93,7 @@ export const TopBar = ({
   totalCount = 0,
   filteredCount = 0,
   isInboxMode = false,
+  onToggleSidebar,
 }: TopBarProps) => {
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
 
@@ -163,6 +166,17 @@ export const TopBar = ({
         <div className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2">
           {/* Navigation controls */}
           <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
+            {onToggleSidebar && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onToggleSidebar}
+                className="h-8 w-8 rounded-lg transition-all duration-200 hover:bg-accent hover:scale-105 mr-0.5 text-muted-foreground hover:text-foreground"
+                title="Toggle Sidebar"
+              >
+                <PanelLeft className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"

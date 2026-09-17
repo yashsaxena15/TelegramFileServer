@@ -704,14 +704,20 @@ async def init_chunked_upload(
     if not user.telegram_user_id:
         raise HTTPException(status_code=400, detail="TELEGRAM_NOT_VERIFIED: Please verify your Telegram account before uploading files")
 
-    # Clean up old upload sessions (> 2 hours old)
+    # Clean up old upload sessions (> 1 hour old)
     now = datetime.datetime.utcnow()
     expired_uids = [
         uid for uid, s in list(_active_upload_sessions.items())
-        if (now - datetime.datetime.fromisoformat(s.get("created_at", now.isoformat()))).total_seconds() > 7200
+        if (now - datetime.datetime.fromisoformat(s.get("created_at", now.isoformat()))).total_seconds() > 3600
     ]
     for uid in expired_uids:
-        _active_upload_sessions.pop(uid, None)
+        s = _active_upload_sessions.pop(uid, None)
+        if s:
+            for t in s.get("upload_tasks", []):
+                if not t.done():
+                    t.cancel()
+            if "dir" in s and os.path.exists(s["dir"]):
+                shutil.rmtree(s["dir"], ignore_errors=True)
 
     upload_id = secrets.token_hex(12)
     tg_files_dir = os.path.join(os.getcwd(), "tg_files", f"chunk_{upload_id}")
@@ -1055,6 +1061,49 @@ async def get_upload_status(
             "status": "processing",
             "message": "Saving to Telegram cloud..."
         }
+
+class AbortUploadRequest(BaseModel):
+    upload_id: str
+
+@router.post("/upload/abort")
+async def abort_chunked_upload(
+    req: AbortUploadRequest,
+    user: User = Depends(require_auth)
+):
+    upload_id = req.upload_id
+    session = _active_upload_sessions.pop(upload_id, None)
+    tg_files_dir = os.path.join(os.getcwd(), "tg_files", f"chunk_{upload_id}")
+
+    if session:
+        # Check permissions if user_id present
+        if session.get("user_id") and session["user_id"] != str(user.telegram_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        # Cancel any ongoing background upload tasks
+        for t in session.get("upload_tasks", []):
+            if not t.done():
+                t.cancel()
+
+        # Release disk semaphore permit if held
+        if "disk_semaphore" in session:
+            try:
+                session["disk_semaphore"].release()
+            except Exception:
+                pass
+
+        # Purge temporary directory from disk
+        if "dir" in session and os.path.exists(session["dir"]):
+            shutil.rmtree(session["dir"], ignore_errors=True)
+
+    if os.path.exists(tg_files_dir):
+        shutil.rmtree(tg_files_dir, ignore_errors=True)
+
+    logger.info(f"Upload session {upload_id} aborted by user and disk storage purged.")
+    return {
+        "status": "aborted",
+        "upload_id": upload_id,
+        "message": "Upload aborted and temporary files cleaned up."
+    }
 
 @router.get("/thumbnail/{file_id}")
 async def get_file_thumbnail(file_id: str, request: Request, auth_token: str = None):

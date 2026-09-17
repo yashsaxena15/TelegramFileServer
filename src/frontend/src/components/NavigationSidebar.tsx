@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Home, FolderOpen, User, Settings, LogOut, Info, Download, X, Star, Trash2, HardDrive, Inbox, Laptop } from "lucide-react";
+import { Home, FolderOpen, User, Settings, LogOut, Info, Download, ArrowUpDown, X, Star, Trash2, HardDrive, Inbox, Laptop } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { motion, AnimatePresence } from "framer-motion";
@@ -101,7 +101,7 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
     { name: "Storage & Analytics", path: "/storage", icon: HardDrive },
     { name: "Profile", path: "/profile", icon: User },
     { name: "Settings", path: "/settings", icon: Settings },
-    { name: "Downloads", path: "/downloads", icon: Download },
+    { name: "Transfers", path: "/transfers", icon: ArrowUpDown },
     { name: "Usage", path: "/usage", icon: Info },
   ];
 
@@ -158,12 +158,12 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
       window.dispatchEvent(event);
       // Also navigate to the settings route
       navigate("/settings");
-    } else if (item === "Downloads") {
-      // Dispatch event to show downloads in file explorer area
-      const event = new CustomEvent('showDownloads');
+    } else if (item === "Transfers" || item === "Downloads") {
+      // Dispatch event to show transfers in file explorer area
+      const event = new CustomEvent('showTransfers');
       window.dispatchEvent(event);
-      // Also navigate to the downloads route
-      navigate("/downloads");
+      // Also navigate to the transfers route
+      navigate("/transfers");
     } else if (item === "Users") {
       // Dispatch event to show users in file explorer area
       const event = new CustomEvent('showUsers');
