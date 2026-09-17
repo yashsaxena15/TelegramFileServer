@@ -16,7 +16,8 @@ interface MoveRequest {
 }
 
 interface ClipboardItem {
-  item: FileItem;
+  items: FileItem[];
+  item?: FileItem; // For backward compatibility
   operation: "copy" | "cut";
   sourcePath: string;
   pasted?: boolean; // Track if the item has been pasted
@@ -26,14 +27,16 @@ export const useFileOperations = () => {
   const [clipboard, setClipboard] = useState<ClipboardItem | null>(null);
   const queryClient = useQueryClient();
 
-  const copyItem = (item: FileItem, sourcePath: string) => {
-    logger.info("Copying item", { item, sourcePath });
-    setClipboard({ item, operation: "copy", sourcePath, pasted: false });
+  const copyItem = (items: FileItem | FileItem[], sourcePath: string) => {
+    const itemList = Array.isArray(items) ? items : [items];
+    logger.info("Copying items", { count: itemList.length, sourcePath });
+    setClipboard({ items: itemList, item: itemList[0], operation: "copy", sourcePath, pasted: false });
   };
 
-  const cutItem = (item: FileItem, sourcePath: string) => {
-    logger.info("Cutting item", { item, sourcePath });
-    setClipboard({ item, operation: "cut", sourcePath, pasted: false });
+  const cutItem = (items: FileItem | FileItem[], sourcePath: string) => {
+    const itemList = Array.isArray(items) ? items : [items];
+    logger.info("Cutting items", { count: itemList.length, sourcePath });
+    setClipboard({ items: itemList, item: itemList[0], operation: "cut", sourcePath, pasted: false });
   };
 
   const clearClipboard = () => {
@@ -47,111 +50,83 @@ export const useFileOperations = () => {
     }
   };
 
-  const hasClipboard = () => clipboard !== null;
+  const hasClipboard = () => clipboard !== null && clipboard.items && clipboard.items.length > 0;
   
   const isClipboardPasted = () => clipboard?.pasted === true;
 
   const pasteItem = async (targetPath: string) => {
-    if (!clipboard) {
+    if (!clipboard || !clipboard.items || clipboard.items.length === 0) {
       logger.warn("No item in clipboard to paste");
       return;
     }
 
-    logger.info("Pasting item", { 
-      operation: clipboard.operation, 
-      item: clipboard.item.name, 
-      sourcePath: clipboard.sourcePath, 
+    const { items, operation, sourcePath } = clipboard;
+    logger.info(`Pasting ${items.length} item(s)`, { 
+      operation, 
+      count: items.length, 
+      sourcePath, 
       targetPath 
     });
 
     try {
       // Ensure paths are properly formatted
-      const sourcePath = clipboard.sourcePath.replace(/\/+/g, '/'); // Remove duplicate slashes
-      targetPath = targetPath.replace(/\/+/g, '/'); // Remove duplicate slashes
+      const cleanSourcePath = sourcePath.replace(/\/+/g, '/');
+      let cleanTargetPath = targetPath.replace(/\/+/g, '/');
       
       // Ensure targetPath doesn't end with a slash unless it's the root
-      if (targetPath !== "/" && targetPath.endsWith("/")) {
-        targetPath = targetPath.slice(0, -1);
+      if (cleanTargetPath !== "/" && cleanTargetPath.endsWith("/")) {
+        cleanTargetPath = cleanTargetPath.slice(0, -1);
       }
 
       const baseUrl = getApiBaseUrl();
-      // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}` : '';
-      const request: CopyMoveRequest = {
-        file_id: clipboard.item.id || "",
-        target_path: targetPath
-      };
+      const endpoint = operation === "copy" ? `${apiUrl}/files/copy` : `${apiUrl}/files/move`;
 
-      if (clipboard.operation === "copy") {
-        logger.info("Performing copy operation", { request });
-        const response = await fetchWithTimeout(`${apiUrl}/files/copy`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify(request),
-        }, 3000); // 3 second timeout
+      const results = await Promise.allSettled(
+        items.map(async (item) => {
+          const fileId = item.id || (item as any)._id;
+          if (!fileId) throw new Error(`Missing ID for ${item.name}`);
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          logger.error("Failed to copy file", { status: response.status, error: errorText });
-          
-          // Handle specific error cases
-          if (response.status === 404) {
-            throw new Error(`File not found: ${clipboard.item.name}`);
-          } else if (response.status === 500) {
-            throw new Error(`Server error while copying file: ${errorText}`);
-          } else {
-            throw new Error(`Failed to copy file: ${errorText}`);
+          const request: CopyMoveRequest = {
+            file_id: String(fileId),
+            target_path: cleanTargetPath
+          };
+
+          const response = await fetchWithTimeout(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "include",
+            body: JSON.stringify(request),
+          }, 15000);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to ${operation} "${item.name}": ${errorText}`);
           }
-        }
-        
-        logger.info("File copied successfully");
-        // For copy operations, we only need to refresh the target path
-        queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
-      } else {
-        // Move operation
-        logger.info("Performing move operation", { request });
-        const response = await fetchWithTimeout(`${apiUrl}/files/move`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify(request),
-        }, 3000); // 3 second timeout
+        })
+      );
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          logger.error("Failed to move file", { status: response.status, error: errorText });
-          
-          // Handle specific error cases
-          if (response.status === 404) {
-            throw new Error(`File not found: ${clipboard.item.name}`);
-          } else if (response.status === 500) {
-            throw new Error(`Server error while moving file: ${errorText}`);
-          } else {
-            throw new Error(`Failed to move file: ${errorText}`);
-          }
-        }
-        
-        logger.info("File moved successfully");
-        // For move operations, refresh both source and target paths
-        queryClient.invalidateQueries({ queryKey: ['files', sourcePath] });
-        queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
-        
-        // Also invalidate the root path in case we're moving to/from root
-        if (sourcePath !== "/") {
-          queryClient.invalidateQueries({ queryKey: ['files', "/"] });
-        }
-        if (targetPath !== "/") {
-          queryClient.invalidateQueries({ queryKey: ['files', "/"] });
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (rejected.length > 0) {
+        const errorMsg = rejected.map(r => r.reason?.message || "Operation failed").join(", ");
+        logger.error("Some paste operations failed", { errorMsg });
+        if (rejected.length === items.length) {
+          throw new Error(errorMsg);
         }
       }
 
-      // Mark as pasted after successful operation
-      markAsPasted();
+      // Refresh all file queries
+      queryClient.invalidateQueries({ queryKey: ['files'] });
+
+      // If this was a cut operation, clear the clipboard so files are not moved again
+      if (operation === "cut") {
+        clearClipboard();
+      } else {
+        markAsPasted();
+      }
+
       return true;
     } catch (error) {
       logger.error("Error during paste operation", error);
@@ -177,7 +152,6 @@ export const useFileOperations = () => {
       }
 
       const baseUrl = getApiBaseUrl();
-      // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}` : '';
       const request: MoveRequest = {
         file_id: item.id || "",
@@ -192,13 +166,12 @@ export const useFileOperations = () => {
         },
         credentials: "include",
         body: JSON.stringify(request),
-      }, 3000); // 3 second timeout
+      }, 10000);
 
       if (!response.ok) {
         const errorText = await response.text();
         logger.error("Failed to move file", { status: response.status, error: errorText });
         
-        // Handle specific error cases
         if (response.status === 404) {
           throw new Error(`File not found: ${item.name}`);
         } else if (response.status === 500) {
@@ -209,17 +182,7 @@ export const useFileOperations = () => {
       }
       
       logger.info("File moved successfully");
-      // For move operations, refresh both source and target paths
-      queryClient.invalidateQueries({ queryKey: ['files', sourcePath] });
-      queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
-      
-      // Also invalidate the root path in case we're moving to/from root
-      if (sourcePath !== "/") {
-        queryClient.invalidateQueries({ queryKey: ['files', "/"] });
-      }
-      if (targetPath !== "/") {
-        queryClient.invalidateQueries({ queryKey: ['files', "/"] });
-      }
+      queryClient.invalidateQueries({ queryKey: ['files'] });
       
       return true;
     } catch (error) {
@@ -230,11 +193,13 @@ export const useFileOperations = () => {
 
   return {
     clipboard,
+    clipboardItems: clipboard?.items || [],
+    cutItems: clipboard?.operation === 'cut' ? clipboard.items : [],
     copyItem,
     cutItem,
     clearClipboard,
     hasClipboard,
-    isClipboardPasted, // Export the new function
+    isClipboardPasted,
     pasteItem,
     moveItem,
   };

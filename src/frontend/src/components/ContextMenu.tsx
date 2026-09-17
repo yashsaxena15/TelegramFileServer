@@ -308,13 +308,13 @@ export const ContextMenu = ({
             { divider: true, label: "", action: "" },
             {
               icon: Copy,
-              label: "Copy",
+              label: selectedCount > 1 ? `Copy (${selectedCount})` : "Copy",
               action: "copy",
               shortcut: "Ctrl+C",
             },
             {
               icon: Scissors,
-              label: "Cut",
+              label: selectedCount > 1 ? `Cut (${selectedCount})` : "Cut",
               action: "cut",
               shortcut: "Ctrl+X",
             },
@@ -340,7 +340,7 @@ export const ContextMenu = ({
             { divider: true, label: "", action: "" },
             {
               icon: Trash2,
-              label: "Move to Trash",
+              label: selectedCount > 1 ? `Move to Trash (${selectedCount})` : "Move to Trash",
               action: "delete",
               shortcut: "Del",
               danger: true,

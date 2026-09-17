@@ -340,7 +340,7 @@ export const FileExplorer = () => {
     ? "/Home"
     : `/${currentPath.join('/')}`;
   const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
-  const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
+  const { clipboard, cutItems, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
 
   // Sort state
   const [sortField, setSortField] = useState<SortField>("name");
@@ -511,18 +511,34 @@ export const FileExplorer = () => {
     }
   };
 
-  const handleCopy = (item: FileItem) => {
-    // Determine source path from item or current path
-    const sourcePath = item.file_path || currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
-    copyItem(item, sourcePath);
-    toast.success(`Copied "${item.name}"`);
+  const handleCopy = (itemsToCopy: FileItem | FileItem[]) => {
+    const itemsList = Array.isArray(itemsToCopy) ? itemsToCopy : [itemsToCopy];
+    if (itemsList.length === 0) return;
+    const firstItem = itemsList[0];
+    const sourcePath = isInboxMode 
+      ? "/Telegram Inbox" 
+      : (firstItem.file_path || currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home"));
+    copyItem(itemsList, sourcePath);
+    if (itemsList.length === 1) {
+      toast.success(`Copied "${itemsList[0].name}"`);
+    } else {
+      toast.success(`Copied ${itemsList.length} items`);
+    }
   };
 
-  const handleCut = (item: FileItem) => {
-    // Determine source path from item or current path
-    const sourcePath = item.file_path || currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
-    cutItem(item, sourcePath);
-    toast.success(`Cut "${item.name}"`);
+  const handleCut = (itemsToCut: FileItem | FileItem[]) => {
+    const itemsList = Array.isArray(itemsToCut) ? itemsToCut : [itemsToCut];
+    if (itemsList.length === 0) return;
+    const firstItem = itemsList[0];
+    const sourcePath = isInboxMode 
+      ? "/Telegram Inbox" 
+      : (firstItem.file_path || currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home"));
+    cutItem(itemsList, sourcePath);
+    if (itemsList.length === 1) {
+      toast.success(`Cut "${itemsList[0].name}"`);
+    } else {
+      toast.success(`Cut ${itemsList.length} items`);
+    }
   };
 
   const handlePaste = async () => {
@@ -1173,6 +1189,7 @@ export const FileExplorer = () => {
               onNewFolder={() => setNewFolderDialogOpen(true)}
               isLoading={isLoading}
               cutItem={clipboard?.operation === "cut" && !isClipboardPasted() ? clipboard.item : null}
+              cutItems={clipboard?.operation === "cut" && !isClipboardPasted() ? cutItems : []}
               hasClipboard={hasClipboard}
               isClipboardPasted={isClipboardPasted()}
               onRefresh={refetch}

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { FileItem, isVideoItem } from "@/components/types";
 import { copyStreamUrl } from "@/lib/utils";
 import { TraversedFile } from "@/lib/folderTraversal"; // Add this import
-import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check, X, Trash2, Download, Info, Star, RotateCcw } from "lucide-react";
+import { Folder, FileText, Image as ImageIcon, FileArchive, MoreVertical, Check, X, Trash2, Download, Info, Star, RotateCcw, Scissors, Copy } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
@@ -39,8 +39,8 @@ interface FileGridProps {
   viewMode: "grid" | "list";
   onNavigate: (folderName: string) => void;
   itemCount: number;
-  onCopy: (item: FileItem) => void;
-  onCut: (item: FileItem) => void;
+  onCopy: (item: FileItem | FileItem[]) => void;
+  onCut: (item: FileItem | FileItem[]) => void;
   onPaste?: () => void;
   onDelete: (item: FileItem, index: number) => void;
   onRename: (item: FileItem, index: number) => void;
@@ -57,6 +57,7 @@ interface FileGridProps {
   onUploadFolder?: () => void; // Add upload folder callback
   isLoading?: boolean;
   cutItem?: FileItem | null; // Add prop to track cut item
+  cutItems?: FileItem[] | null; // Track multiple cut items
   hasClipboard?: () => boolean; // Add prop to track if there's clipboard content
   isClipboardPasted?: boolean; // Add prop to track if clipboard item has been pasted
   onFileUploaded?: (file: FileItem) => void; // Callback for when a file is uploaded
@@ -99,6 +100,7 @@ export const FileGrid = ({
   onUploadFolder, // Add this
   isLoading,
   cutItem,
+  cutItems = [],
   hasClipboard,
   isClipboardPasted,
   onFileUploaded,
@@ -220,6 +222,23 @@ export const FileGrid = ({
           if (found) {
             setPropertiesItem(found);
           }
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        if (selectedItems.size > 0) {
+          e.preventDefault();
+          const selectedList = items.filter(it => selectedItems.has(getItemKey(it)));
+          if (selectedList.length > 0) onCopy(selectedList);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
+        if (selectedItems.size > 0) {
+          e.preventDefault();
+          const selectedList = items.filter(it => selectedItems.has(getItemKey(it)));
+          if (selectedList.length > 0) onCut(selectedList);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (hasClipboard && hasClipboard() && onPaste) {
+          e.preventDefault();
+          onPaste();
         }
       }
     };
@@ -410,6 +429,13 @@ export const FileGrid = ({
     e.stopPropagation(); // Prevent event from bubbling to parent container
     // Additional prevention of default context menu
     e.nativeEvent.preventDefault();
+
+    const itemKey = getItemKey(item);
+    if (!selectedItems.has(itemKey)) {
+      setSelectedItems(new Set([itemKey]));
+      setLastSelectedIndex(index);
+    }
+
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -1599,6 +1625,34 @@ export const FileGrid = ({
                 {selectedFilesCount > 0 && <span className="text-[11px] text-muted-foreground">({selectedFilesCount})</span>}
               </button>
 
+              <button
+                type="button"
+                onClick={() => {
+                  const selectedList = items.filter(it => selectedItems.has(getItemKey(it)));
+                  if (selectedList.length > 0) onCut(selectedList);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-background hover:bg-accent border border-border/60 text-foreground transition-colors shadow-sm"
+                title="Cut selected items (Ctrl+X)"
+              >
+                <Scissors className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Cut</span>
+                <span className="text-[11px] text-muted-foreground">({selectedItems.size})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const selectedList = items.filter(it => selectedItems.has(getItemKey(it)));
+                  if (selectedList.length > 0) onCopy(selectedList);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-background hover:bg-accent border border-border/60 text-foreground transition-colors shadow-sm"
+                title="Copy selected items (Ctrl+C)"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Copy</span>
+                <span className="text-[11px] text-muted-foreground">({selectedItems.size})</span>
+              </button>
+
               {selectedItems.size === 1 && (
                 <button
                   type="button"
@@ -1657,7 +1711,10 @@ export const FileGrid = ({
               const itemKey = getItemKey(item);
               const isRenaming = renamingItem?.index === index;
               const isDragging = (draggedItem?.id && item.id) ? draggedItem.id === item.id : draggedItem?.name === item.name;
-              const isCut = cutItem?.name === item.name && cutItem?.id === item.id; // Check if this item is cut
+              const isCut = Boolean(
+                (cutItems && cutItems.some(ci => (ci.id && item.id ? ci.id === item.id : ci.name === item.name))) ||
+                (cutItem && (cutItem.id && item.id ? cutItem.id === item.id : cutItem.name === item.name))
+              );
               const isSelected = selectedItems.has(itemKey);
 
               return (
@@ -1834,7 +1891,10 @@ export const FileGrid = ({
                 const itemKey = getItemKey(item);
                 const isRenaming = renamingItem?.index === index;
                 const isDragging = (draggedItem?.id && item.id) ? draggedItem.id === item.id : draggedItem?.name === item.name;
-                const isCut = cutItem?.name === item.name && cutItem?.id === item.id; // Check if this item is cut
+                const isCut = Boolean(
+                  (cutItems && cutItems.some(ci => (ci.id && item.id ? ci.id === item.id : ci.name === item.name))) ||
+                  (cutItem && (cutItem.id && item.id ? cutItem.id === item.id : cutItem.name === item.name))
+                );
                 const isSelected = selectedItems.has(itemKey);
 
                 return (
@@ -2053,8 +2113,26 @@ export const FileGrid = ({
             isVideo={isVideo}
             onCopyStreamUrl={() => contextMenu.item && copyStreamUrl(contextMenu.item.name)}
             onOpen={() => contextMenu.item && handleItemOpen(contextMenu.item)}
-            onCopy={() => contextMenu.item && onCopy(contextMenu.item)}
-            onCut={() => contextMenu.item && onCut(contextMenu.item)}
+            onCopy={() => {
+              if (!contextMenu.item) return;
+              const itemKey = getItemKey(contextMenu.item);
+              if (selectedItems.size > 1 && selectedItems.has(itemKey)) {
+                const multi = items.filter(it => selectedItems.has(getItemKey(it)));
+                onCopy(multi);
+              } else {
+                onCopy(contextMenu.item);
+              }
+            }}
+            onCut={() => {
+              if (!contextMenu.item) return;
+              const itemKey = getItemKey(contextMenu.item);
+              if (selectedItems.size > 1 && selectedItems.has(itemKey)) {
+                const multi = items.filter(it => selectedItems.has(getItemKey(it)));
+                onCut(multi);
+              } else {
+                onCut(contextMenu.item);
+              }
+            }}
             onPaste={onPaste}
             onDelete={() => contextMenu.item && onDelete(contextMenu.item, contextMenu.index)}
             onRename={() => contextMenu.item && onRename(contextMenu.item, contextMenu.index)}
