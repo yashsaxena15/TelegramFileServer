@@ -4,7 +4,7 @@ set -euo pipefail
 # ==============================================================================
 # TelegramFileServer - Automated MongoDB Backup Script
 # Destination: /mnt/gdrive2/Telegram database backup /
-# Retention: Strictly keep the latest 5 backups (auto-delete oldest)
+# Retention: Strictly keep the latest 10 backups (auto-delete oldest)
 # ==============================================================================
 
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
@@ -24,7 +24,7 @@ fi
 BACKUP_NAME="mongo_backup_${DATE}.archive.gz"
 TEMP_FILE="/tmp/${BACKUP_NAME}"
 TARGET_FILE="${BACKUP_DIR}/${BACKUP_NAME}"
-MAX_BACKUPS=5
+MAX_BACKUPS=10
 
 echo "========================================================================"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting MongoDB Backup..."
