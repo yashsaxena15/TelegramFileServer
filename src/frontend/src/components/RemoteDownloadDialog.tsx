@@ -163,6 +163,18 @@ export const RemoteDownloadDialog: React.FC<RemoteDownloadDialogProps> = ({
               </div>
             )}
 
+            {loading && (
+              <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400 flex items-start gap-2 animate-pulse">
+                <Loader2 className="w-4 h-4 shrink-0 mt-0.5 animate-spin" />
+                <div>
+                  <div className="font-semibold text-blue-300">Scanning & Queuing Items...</div>
+                  <p className="text-[11px] text-blue-300/80 mt-0.5">
+                    Scanning subfolders and building the transfer queue. For large folders this may take 30 to 60 seconds. Please keep this dialog open.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Info Callout */}
             <div className="p-3 rounded-lg bg-muted/20 border border-border/60 text-xs text-muted-foreground space-y-1">
               <div className="font-semibold text-foreground flex items-center gap-1.5">
@@ -193,7 +205,7 @@ export const RemoteDownloadDialog: React.FC<RemoteDownloadDialogProps> = ({
               {loading ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Resolving...
+                  Scanning Google Drive...
                 </>
               ) : (
                 <>

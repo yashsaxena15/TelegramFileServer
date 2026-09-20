@@ -302,7 +302,21 @@ class RemoteTransferManager:
             if not folder_files:
                 raise ValueError("Google Drive folder is empty or not accessible.")
 
+            # Deduplication: Find any existing tasks for this user & destination
+            existing_gdrive_ids = set(
+                coll.distinct("gdrive_id", {
+                    "user_id": str(user_id),
+                    "gdrive_id": {"$ne": None},
+                    "destination_path": {"$regex": f"^{re.escape(clean_dest)}"},
+                    "status": {"$in": ["queued", "downloading", "uploading_tg", "completed"]}
+                })
+            )
+
+            docs_to_insert = []
             for gfile in folder_files:
+                if gfile.id in existing_gdrive_ids:
+                    continue  # Skip already queued/downloaded file
+
                 task_id = f"rt_{secrets.token_hex(6)}"
                 # gfile.local_path has format: "/tmp/gdrive_resolve_xxx/FolderName/sub/file.ext"
                 rel_from_root = os.path.relpath(gfile.local_path, resolve_output_dir).replace("\\", "/").strip("/")
@@ -332,9 +346,14 @@ class RemoteTransferManager:
                     "created_at": now,
                     "updated_at": now
                 }
-                coll.insert_one(doc)
-                doc["_id"] = str(doc["_id"])
+                docs_to_insert.append(doc)
                 created_tasks.append(doc)
+
+            if docs_to_insert:
+                coll.insert_many(docs_to_insert)
+                for doc in docs_to_insert:
+                    doc["_id"] = str(doc["_id"])
+
             return created_tasks
 
         # Check if Google Drive Single File

@@ -1258,7 +1258,7 @@ export const api = {
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
             body: JSON.stringify({ url, destination_path }),
-        });
+        }, 300000); // 5 minutes timeout for scanning deep Google Drive folder structures
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to start remote transfer');
