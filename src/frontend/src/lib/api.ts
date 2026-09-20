@@ -1102,4 +1102,139 @@ export const api = {
 
         return response.json();
     },
+
+    async getVaultStatus(): Promise<{ is_setup: boolean; is_unlocked: boolean; email?: string; remaining_seconds?: number }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/status`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            throw new Error('Failed to fetch vault status');
+        }
+        return response.json();
+    },
+
+    async requestVaultSetupOtp(email: string): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/setup/request-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ email }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to send verification code');
+        }
+        return response.json();
+    },
+
+    async verifyAndCreateVault(email: string, otp_code: string, pin: string): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/setup/verify-and-create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ email, otp_code, pin }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to create vault');
+        }
+        return response.json();
+    },
+
+    async unlockVault(pin: string): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/unlock`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ pin }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Incorrect PIN');
+        }
+        return response.json();
+    },
+
+    async lockVault(): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/lock`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            throw new Error('Failed to lock vault');
+        }
+        return response.json();
+    },
+
+    async requestForgotPinOtp(): Promise<{ success: boolean; message: string; masked_email?: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/forgot-pin/request-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to request reset code');
+        }
+        return response.json();
+    },
+
+    async resetVaultPin(otp_code: string, new_pin: string): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/forgot-pin/reset`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ otp_code, new_pin }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to reset PIN');
+        }
+        return response.json();
+    },
+
+    async moveIntoVault(fileId: string, targetPath: string = '/Vault'): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/move-in`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ file_id: fileId, target_path: targetPath }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to move item to Vault');
+        }
+        return response.json();
+    },
+
+    async moveOutOfVault(fileId: string, targetPath: string = '/Home'): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/move-out`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ file_id: fileId, target_path: targetPath }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to move item out of Vault');
+        }
+        return response.json();
+    },
+
+    async createVaultFolder(folderName: string, currentPath: string = '/Vault'): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/create-folder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ folder_name: folderName, current_path: currentPath }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to create folder in Vault');
+        }
+        return response.json();
+    },
 };

@@ -132,6 +132,12 @@ async def stream_handler(request: Request, file_name: str):
             print(f"File not found in database for name: {decoded_file_name}")
             raise HTTPException(status_code=404, detail="File not found")
         
+        # Check vault security
+        if file_data.get("is_vault"):
+            from .vault_routes import is_vault_unlocked
+            if not is_vault_unlocked(request):
+                raise HTTPException(status_code=403, detail="Vault is locked. Please unlock Private Vault first.")
+        
         # Get file unique ID for Telegram lookup
         file_unique_id = file_data.get("file_unique_id")
         chat_id = file_data.get("chat_id")

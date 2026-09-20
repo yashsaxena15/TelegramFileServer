@@ -66,6 +66,9 @@ interface FileGridProps {
   isTrashMode?: boolean;
   onRestoreItem?: (item: FileItem) => void;
   onToggleStar?: (item: FileItem) => void;
+  isVaultMode?: boolean;
+  onMoveToVault?: (item: FileItem) => void;
+  onMoveToHome?: (item: FileItem) => void;
 }
 
 interface ContextMenuState {
@@ -111,6 +114,9 @@ export const FileGrid = ({
   isTrashMode,
   onRestoreItem,
   onToggleStar,
+  isVaultMode = false,
+  onMoveToVault,
+  onMoveToHome,
 }: FileGridProps) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
@@ -2152,6 +2158,9 @@ export const FileGrid = ({
             onProperties={() => contextMenu.item && setPropertiesItem(contextMenu.item)}
             isArchive={isArchiveItem}
             selectedCount={selectedCount}
+            isVaultMode={isVaultMode}
+            onMoveToVault={() => contextMenu.item && onMoveToVault?.(contextMenu.item)}
+            onMoveToHome={() => contextMenu.item && onMoveToHome?.(contextMenu.item)}
             onInspectArchive={() => {
               if (contextMenu.item) {
                 setArchiveInspect({

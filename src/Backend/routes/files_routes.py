@@ -122,10 +122,24 @@ async def move_file_route(request: MoveFileRequest, user: User = Depends(require
             raise HTTPException(status_code=404, detail="File not found")
         
         # Update the file's path and modified date
+        is_target_vault = request.target_path.startswith("/Vault") or request.target_path == "Vault"
+        update_fields = {
+            "file_path": request.target_path,
+            "is_vault": is_target_vault,
+            "modified_date": datetime.datetime.utcnow().isoformat()
+        }
         database.Files.update_one(
             {"_id": ObjectId(request.file_id), "owner_id": user_id},
-            {"$set": {"file_path": request.target_path, "modified_date": datetime.datetime.utcnow().isoformat()}}
+            {"$set": update_fields}
         )
+        
+        # If moving a folder, update all descendant items is_vault status
+        if file_data.get("file_type") == "folder":
+            old_full_path = f"{file_data.get('file_path', '').rstrip('/')}/{file_data.get('file_name', '')}"
+            database.Files.update_many(
+                {"file_path": {"$regex": f"^{re.escape(old_full_path)}(/.*)?$"}},
+                {"$set": {"is_vault": is_target_vault}}
+            )
         
         return {"message": "File moved successfully"}
     except Exception as e:

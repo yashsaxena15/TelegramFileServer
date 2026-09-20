@@ -126,10 +126,10 @@ def validate_folder_name(name: str) -> str:
 def validate_folder_creation(folder_name: str, current_path: str) -> str:
     """Validates folder name, subfolder depth limit, and total path length."""
     valid_name = validate_folder_name(folder_name)
-    if valid_name.lower() in ["home", "trash", "starred", "telegram inbox", "inbox"] and current_path in ["/", "/Home", "Home", ""]:
+    if valid_name.lower() in ["home", "trash", "starred", "telegram inbox", "inbox", "vault"] and current_path in ["/", "/Home", "Home", ""]:
         raise HTTPException(
             status_code=400,
-            detail="Cannot create folder with reserved name ('Home', 'Trash', 'Starred', 'Telegram Inbox') in the root directory."
+            detail="Cannot create folder with reserved name ('Home', 'Trash', 'Starred', 'Telegram Inbox', 'Vault') in the root directory."
         )
     current_depth = calculate_folder_depth(current_path)
     if current_depth >= MAX_FOLDER_DEPTH:

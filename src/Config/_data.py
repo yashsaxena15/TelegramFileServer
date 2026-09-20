@@ -40,6 +40,12 @@ DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "password")
 _raw_admin_emails = os.getenv("AUTHORIZED_ADMIN_EMAILS", "")
 AUTHORIZED_ADMIN_EMAILS = [e.strip() for e in _raw_admin_emails.split(",") if e.strip()]
 
+# SMTP Email Configuration
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
 TOKENS = []
 for i in range(20):
     if (t := os.getenv(f"TOKEN{i}")):

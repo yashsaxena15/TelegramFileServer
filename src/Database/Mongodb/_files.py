@@ -33,6 +33,7 @@ class FileData:
     trashed: bool = False
     trashed_at: str = None
     original_path: str = None
+    is_vault: bool = False
     
 class Files(Collection):
     def __init__(self,collection: Collection) -> None:
@@ -161,6 +162,9 @@ class Files(Collection):
         if owner_id:
             folder_doc["owner_id"] = owner_id
             
+        if folder_path.startswith("/Vault") or folder_path == "Vault":
+            folder_doc["is_vault"] = True
+            
         logger.info(f"Inserting folder document: {folder_doc}")
         self.insert_one(folder_doc)
         return True
@@ -260,31 +264,39 @@ class Files(Collection):
                 base_query["owner_id"] = owner_id
             return base_query
         
+        # Vault path (Root)
+        if path in ["vault", "/vault", "/Vault", "Vault"]:
+            query = build_query({"file_path": {"$in": ["/Vault", "Vault"]}, "is_vault": True, "trashed": {"$ne": True}})
+            all_items = list(self.find(query))
+        # Vault subfolders
+        elif path.startswith("/Vault/") or path.startswith("Vault/"):
+            query = build_query({"file_path": path, "is_vault": True, "trashed": {"$ne": True}})
+            all_items = list(self.find(query))
         # Trash path
-        if path in ["trash", "/trash", "/Home/Trash", "Trash", "/Trash"]:
-            query = build_query({"trashed": True})
+        elif path in ["trash", "/trash", "/Home/Trash", "Trash", "/Trash"]:
+            query = build_query({"trashed": True, "is_vault": {"$ne": True}})
             all_items = list(self.find(query))
         # Starred path
         elif path in ["starred", "/starred", "/Home/Starred", "Starred", "/Starred"]:
-            query = build_query({"starred": True, "trashed": {"$ne": True}})
+            query = build_query({"starred": True, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
             all_items = list(self.find(query))
         # Telegram Inbox path
         elif path in ["inbox", "/inbox", "Telegram Inbox", "/Telegram Inbox", "/Home/Telegram Inbox", "inbox/"]:
-            query = build_query({"file_path": "/Telegram Inbox", "trashed": {"$ne": True}})
+            query = build_query({"file_path": "/Telegram Inbox", "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
             all_items = list(self.find(query))
         # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
         elif path == "all":
             # Get all files except folders
-            files_query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}})
+            files_query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
             all_items = list(self.find(files_query))
         # For root path, get files with path="/" and folders with path="/"
         elif path in ["/", "Home", "/Home"]:
             # Get root-level files and folders (support both /Home and /)
-            files_query = build_query({"file_path": {"$in": ["/Home", "/"]}, "trashed": {"$ne": True}})
+            files_query = build_query({"file_path": {"$in": ["/Home", "/"]}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
             all_items = list(self.find(files_query))
         else:
             # Get files and folders in the specified folder
-            base_query = {"file_path": path, "trashed": {"$ne": True}}
+            base_query = {"file_path": path, "trashed": {"$ne": True}, "is_vault": {"$ne": True}}
             query = build_query(base_query)
             logger.info(f"Executing file query: {query}")
             all_items = list(self.find(query))
@@ -309,7 +321,8 @@ class Files(Collection):
             starred=bool(file.get("starred", False)),
             trashed=bool(file.get("trashed", False)),
             trashed_at=file.get("trashed_at"),
-            original_path=file.get("original_path")
+            original_path=file.get("original_path"),
+            is_vault=bool(file.get("is_vault", False))
         ) for file in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):

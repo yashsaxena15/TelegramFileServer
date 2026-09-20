@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { 
   FolderOpen, Star, Trash2, 
   HardDrive, User, Settings, Users, LogOut, Inbox, Laptop,
-  ArrowUpDown, X, PanelLeft
+  ArrowUpDown, X, PanelLeft, ShieldCheck
 } from "lucide-react";
 import { FileItem } from "./types";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -126,6 +126,7 @@ export const Sidebar = ({
     { name: "Telegram Inbox", icon: Inbox, filter: "inbox" },
     { name: "Starred", icon: Star, filter: "starred" },
     { name: "Trash", icon: Trash2, filter: "trash" },
+    { name: "Private Vault", icon: ShieldCheck, filter: "vault" },
   ];
 
   const profileOptions = [

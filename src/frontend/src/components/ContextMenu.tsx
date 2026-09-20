@@ -18,6 +18,7 @@ import {
   RotateCcw,
   Archive,
   Link,
+  ShieldCheck,
 } from "lucide-react";
 
 interface ContextMenuProps {
@@ -51,6 +52,9 @@ interface ContextMenuProps {
   onToggleStar?: () => void;
   isTrashMode?: boolean;
   onRestore?: () => void;
+  isVaultMode?: boolean;
+  onMoveToVault?: () => void;
+  onMoveToHome?: () => void;
 }
 
 interface MenuItem {
@@ -196,6 +200,14 @@ export const ContextMenu = ({
         onCompress?.();
         onClose();
         break;
+      case "move_to_vault":
+        onMoveToVault?.();
+        onClose();
+        break;
+      case "move_to_home":
+        onMoveToHome?.();
+        onClose();
+        break;
       default:
         onClose();
     }
@@ -337,6 +349,21 @@ export const ContextMenu = ({
               action: "share",
               disabled: true,
             },
+            ...(isVaultMode
+              ? [
+                  {
+                    icon: FolderOpen,
+                    label: selectedCount > 1 ? `Move to Home (${selectedCount})` : "Move to Home",
+                    action: "move_to_home",
+                  },
+                ]
+              : [
+                  {
+                    icon: ShieldCheck,
+                    label: selectedCount > 1 ? `Move to Vault 🔒 (${selectedCount})` : "Move to Vault 🔒",
+                    action: "move_to_vault",
+                  },
+                ]),
             { divider: true, label: "", action: "" },
             {
               icon: Trash2,

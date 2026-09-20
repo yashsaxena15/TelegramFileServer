@@ -46,12 +46,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import logger from "@/lib/logger";
-import { X as XIcon, Trash2, RotateCcw, AlertCircle } from "lucide-react";
+import { X as XIcon, Trash2, RotateCcw, AlertCircle, ShieldCheck, Lock, Unlock } from "lucide-react";
 import { downloadManager } from "@/lib/downloadManager";
 import { motion, AnimatePresence } from "framer-motion";
 import { useError } from "@/contexts/ErrorHandlerContext"; // Import the error context
 import { FolderDownloadDialog, FolderDownloadInfo, FolderPartInfo } from "./FolderDownloadDialog";
 import { WebDAVMountDialog } from "./WebDAVMountDialog";
+import { VaultModal } from "./VaultModal";
 
 export const FileExplorer = () => {
   const location = useLocation();
@@ -109,7 +110,21 @@ export const FileExplorer = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemType: "file" | "folder" | "empty"; itemName: string; item?: FileItem; index?: number } | null>(null);
   const [folderDownloadInfo, setFolderDownloadInfo] = useState<FolderDownloadInfo | null>(null);
   const [showWebDAVDialog, setShowWebDAVDialog] = useState(false);
+  const [showVaultModal, setShowVaultModal] = useState(false);
+  const [isVaultUnlocked, setIsVaultUnlocked] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
   const queryClient = useQueryClient();
+
+  // Check initial Vault status and user profile
+  useEffect(() => {
+    api.getVaultStatus().then(st => {
+      setIsVaultUnlocked(st.is_unlocked);
+    }).catch(() => {});
+
+    api.fetchUserProfile().then(p => {
+      if (p && p.email) setUserEmail(p.email);
+    }).catch(() => {});
+  }, []);
 
   // Listen for showWebDAVMount custom events
   useEffect(() => {
@@ -328,6 +343,7 @@ export const FileExplorer = () => {
   const isTrashMode = selectedFilter === "trash" || currentFolder === "Trash";
   const isStarredMode = selectedFilter === "starred" || currentFolder === "Starred";
   const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
+  const isVaultMode = selectedFilter === "vault" || currentFolder === "Private Vault" || currentPath[0] === "Private Vault" || currentPath[0] === "Vault";
 
   // Convert currentPath to API path format
   const currentApiPath = isTrashMode
@@ -336,6 +352,8 @@ export const FileExplorer = () => {
     ? "/starred"
     : isInboxMode
     ? "/inbox"
+    : isVaultMode
+    ? (currentPath.length > 1 ? `/Vault/${currentPath.slice(1).join('/')}` : "/Vault")
     : currentPath.length === 1 && currentPath[0] === "Home"
     ? "/Home"
     : `/${currentPath.join('/')}`;
@@ -498,14 +516,20 @@ export const FileExplorer = () => {
 
     if (isUserFolder) {
       setCurrentPath([...currentPath, folderName]);
-      setSelectedFilter("all"); // Reset filter when navigating
+      if (!isVaultMode) {
+        setSelectedFilter("all"); // Reset filter when navigating normal folders
+      }
     }
   };
 
   const handleBreadcrumbClick = (index: number) => {
     if (index === 0) {
-      // If clicking on Home, explicitly set to Home
-      setCurrentPath(["Home"]);
+      if (isVaultMode) {
+        setCurrentPath(["Private Vault"]);
+      } else {
+        // If clicking on Home, explicitly set to Home
+        setCurrentPath(["Home"]);
+      }
     } else {
       setCurrentPath(currentPath.slice(0, index + 1));
     }
@@ -555,7 +579,78 @@ export const FileExplorer = () => {
     }
   };
 
+  const handleVaultUnlocked = () => {
+    setIsVaultUnlocked(true);
+    setSelectedFilter("vault");
+    setCurrentPath(["Private Vault"]);
+    refetch();
+  };
+
+  const handleLockVault = async () => {
+    try {
+      await api.lockVault();
+    } finally {
+      setIsVaultUnlocked(false);
+      handleFilterChange("all");
+      toast.success("Vault Locked 🔒");
+    }
+  };
+
+  const handleMoveToVault = async (item: FileItem) => {
+    if (!item?.id) return;
+    try {
+      await api.moveIntoVault(item.id);
+      toast.success(`Moved "${item.name}" to Private Vault 🔒`);
+      refetch();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to move item to Vault");
+    }
+  };
+
+  const handleMoveToHome = async (item: FileItem) => {
+    if (!item?.id) return;
+    try {
+      await api.moveOutOfVault(item.id);
+      toast.success(`Moved "${item.name}" to Home 📂`);
+      refetch();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to move item out of Vault");
+    }
+  };
+
+  useEffect(() => {
+    if (!isVaultUnlocked) return;
+    const interval = setInterval(() => {
+      api.getVaultStatus().then(st => {
+        if (!st.is_unlocked && isVaultUnlocked) {
+          setIsVaultUnlocked(false);
+          if (isVaultMode) {
+            handleFilterChange("all");
+            toast.info("Vault locked due to 15 minutes of inactivity.");
+          }
+        }
+      }).catch(() => {});
+    }, 45000);
+    return () => clearInterval(interval);
+  }, [isVaultUnlocked, isVaultMode]);
+
   const handleFilterChange = (filter: string) => {
+    if (filter === "vault") {
+      if (!isVaultUnlocked) {
+        setShowVaultModal(true);
+        return;
+      }
+      setCurrentPath(["Private Vault"]);
+      setSelectedFilter("vault");
+      setTypeFilter("all");
+      setSizeFilter("all");
+      setDateFilter("all");
+      setSortField("name");
+      setSortOrder("asc");
+      setFoldersFirst(true);
+      return;
+    }
+
     // Map filter to folder name
     const folderMap: Record<string, string> = {
       all: "Home",
@@ -1168,6 +1263,26 @@ export const FileExplorer = () => {
               </div>
             )}
 
+            {/* Vault Security Banner */}
+            {isVaultMode && (
+              <div className="flex items-center justify-between px-4 py-2 bg-cyan-950/40 border-b border-cyan-800/40 text-sm">
+                <div className="flex items-center gap-2 text-cyan-300">
+                  <ShieldCheck className="w-4 h-4 shrink-0 text-cyan-400" />
+                  <span className="font-semibold text-xs sm:text-sm">Private Encrypted Vault</span>
+                  <span className="text-[11px] text-slate-400 hidden md:inline">&bull; Zero-Knowledge AES-256 Cloud &bull; Auto-locks after 15m inactivity</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLockVault}
+                  className="h-7 text-xs font-medium px-3 gap-1.5 shrink-0 border-cyan-700/60 bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-200"
+                >
+                  <Lock className="w-3.5 h-3.5 text-cyan-400" />
+                  Lock Vault
+                </Button>
+              </div>
+            )}
+
             <FileGrid
               items={filteredItems}
               viewMode={viewMode}
@@ -1178,6 +1293,9 @@ export const FileExplorer = () => {
               onPaste={hasClipboard && !isClipboardPasted() ? handlePaste : undefined}
               onDelete={handleDelete}
               onRename={handleRename}
+              isVaultMode={isVaultMode}
+              onMoveToVault={handleMoveToVault}
+              onMoveToHome={handleMoveToHome}
               onMove={handleMove}
               onDownload={handleDownload}
               renamingItem={renamingItem}
@@ -1257,6 +1375,13 @@ export const FileExplorer = () => {
       <WebDAVMountDialog
         open={showWebDAVDialog}
         onOpenChange={setShowWebDAVDialog}
+      />
+
+      <VaultModal
+        isOpen={showVaultModal}
+        onClose={() => setShowVaultModal(false)}
+        onSuccess={handleVaultUnlocked}
+        userEmail={userEmail}
       />
 
       {contextMenu && (
