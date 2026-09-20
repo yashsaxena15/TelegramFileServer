@@ -122,7 +122,40 @@ A modern, high-performance, self-hosted Cloud Storage and Media Streaming Server
 - **Folder Properties Dialog**: Instantly inspect recursive statistics for any folder, including total recursive file count and human-readable aggregate size.
 - **Bi-Directional Telegram Sync**: Deleting files or folders in the web UI automatically removes the corresponding messages from your Telegram channels to prevent orphaned files.
 - **Multi-Selection & Batch Actions**: Select multiple files or folders for bulk deletion, movement, or downloading.
-- **Intuitive Navigation Bar**: Streamlined top bar with responsive search bar, quick layout toggles (Grid/List), and mobile drawer navigation.
+---
+
+### 🔐 Encrypted Private Vault (PIN-Protected & Zero-Leak)
+- **Zero-Leak Dedicated Container**: Dedicated sidebar section (`/Vault`) strictly isolated from the main drive.
+- **6-Digit Numeric PIN Lock**: Salted bcrypt password hashing with constant-time verification.
+- **Inactivity Auto-Lock**: Automatically re-locks after 15 minutes of inactivity or upon browser refresh/tab close.
+- **2-Way Movement**: Seamlessly move sensitive files and folders between **Home** and **Private Vault** via the 3-dots action menu or drag-and-drop.
+- **Secure Email PIN Reset via OTP**: 
+  - Integrated SMTP email dispatch with modern HTML security templates.
+  - 6-digit numeric OTP with 10-minute validity and 60-second anti-abuse cooldown.
+  - In-place PIN reset modal without exposing files or resetting drive data.
+
+---
+
+### 🧲 Cloud Leeching & Remote Transfers (Google Drive & Direct URLs)
+- **Zero Client Bandwidth (Server-to-Server)**: Download files and entire folders directly from Google Drive or direct HTTP/HTTPS links straight into your Telegram storage without consuming your phone/laptop data.
+- **Recursive Folder Hierarchy Preservation**: Resolves nested Google Drive folder trees and reconstructs the identical directory structure at your chosen destination path.
+- **Interactive Visual Folder Picker**: Browse through subfolders visually and click "Select This Folder" instead of manually typing destination paths.
+- **Simultaneous Producer-Consumer Streaming (10GB+ Files)**:
+  - Chunks live streams into standard 1.95 GB parts.
+  - Automatically dispatches Part 1 to Telegram bots while Part 2 is simultaneously downloading from Google Drive.
+  - Automatically deletes completed parts from the VM disk upon successful Telegram upload.
+  - Semaphore backpressure strictly caps disk buffer to **maximum 2 parts (~3.9 GB)**, allowing 100GB+ files to transfer without filling VM disk space.
+- **Modern Anti-Bot Bypass**: Uses modern browser headers (`Chrome/128.0`) and direct streaming fallbacks to bypass Google's 403 bot-detection on large video and media files.
+
+---
+
+### ⚡ Dynamic Bandwidth Priority & QoS Scheduler (Auto-Pause & Resume)
+- **User-First Bandwidth Allocation**: Personal **User-to-Server uploads** always have Tier-1 High Priority.
+- **Instant Auto-Pause**: When a user begins uploading files from their browser, background Server-to-Server transfers immediately pause, granting 100% network bandwidth and all 12 Telegram worker bots to the user for maximum upload speed.
+- **Resilient Auto-Resume with HTTP Range**:
+  - As soon as all active user uploads complete or abort, paused cloud transfers automatically resume at their exact byte offset (`Range: bytes={offset}-`).
+  - Zero lost progress or redundant re-downloads, even if Google Drive sockets disconnect during long pauses.
+- **Transfers Widget & Live Page**: Live tracking with amber `PAUSED` badges, real-time speed, progress bars, and informative status updates.
 
 ---
 

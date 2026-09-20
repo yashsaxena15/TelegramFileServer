@@ -53,6 +53,7 @@ import { useError } from "@/contexts/ErrorHandlerContext"; // Import the error c
 import { FolderDownloadDialog, FolderDownloadInfo, FolderPartInfo } from "./FolderDownloadDialog";
 import { WebDAVMountDialog } from "./WebDAVMountDialog";
 import { VaultModal } from "./VaultModal";
+import { RemoteDownloadDialog } from "./RemoteDownloadDialog";
 
 export const FileExplorer = () => {
   const location = useLocation();
@@ -113,6 +114,7 @@ export const FileExplorer = () => {
   const [showVaultModal, setShowVaultModal] = useState(false);
   const [isVaultUnlocked, setIsVaultUnlocked] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [remoteDownloadOpen, setRemoteDownloadOpen] = useState(false);
   const queryClient = useQueryClient();
 
   // Check initial Vault status and user profile
@@ -1018,11 +1020,17 @@ export const FileExplorer = () => {
       "Telegram Inbox": "inbox",
       "Starred": "starred",
       "Trash": "trash",
+      "Private Vault": "vault",
+      "Vault": "vault",
     };
     
+    // Check if we are inside Private Vault (root or any subfolder)
+    const rootFolder = currentPath[0];
+    const isInsideVault = rootFolder === "Private Vault" || rootFolder === "Vault";
+
     // If we're in a default folder, select the corresponding filter
     const currentFolderName = currentPath[currentPath.length - 1];
-    const filter = folderMap[currentFolderName] || "all";
+    const filter = isInsideVault ? "vault" : (folderMap[currentFolderName] || "all");
     
     // Only update if it's different to prevent infinite loops
     if (selectedFilter !== filter) {
@@ -1240,6 +1248,7 @@ export const FileExplorer = () => {
               totalCount={baseItems.length}
               filteredCount={filteredItems.length}
               isInboxMode={isInboxMode}
+              onOpenRemoteDownload={() => setRemoteDownloadOpen(true)}
             />
 
             {/* Trash Banner */}
@@ -1382,6 +1391,12 @@ export const FileExplorer = () => {
         onClose={() => setShowVaultModal(false)}
         onSuccess={handleVaultUnlocked}
         userEmail={userEmail}
+      />
+
+      <RemoteDownloadDialog
+        isOpen={remoteDownloadOpen}
+        onClose={() => setRemoteDownloadOpen(false)}
+        defaultPath={currentApiPath}
       />
 
       {contextMenu && (

@@ -12,6 +12,7 @@ import {
   Check,
   RotateCcw,
   PanelLeft,
+  CloudDownload,
 } from "lucide-react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
@@ -66,6 +67,7 @@ interface TopBarProps {
   filteredCount?: number;
   isInboxMode?: boolean;
   onToggleSidebar?: () => void;
+  onOpenRemoteDownload?: () => void;
 }
 
 export const TopBar = ({
@@ -94,6 +96,7 @@ export const TopBar = ({
   filteredCount = 0,
   isInboxMode = false,
   onToggleSidebar,
+  onOpenRemoteDownload,
 }: TopBarProps) => {
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
 
@@ -438,6 +441,20 @@ export const TopBar = ({
                 </div>
               </PopoverContent>
             </Popover>
+          )}
+
+          {/* Remote Cloud Download Trigger */}
+          {onOpenRemoteDownload && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onOpenRemoteDownload}
+              className="h-8 gap-1.5 px-2.5 rounded-lg text-xs font-medium shrink-0 border-purple-500/30 text-purple-600 dark:text-purple-400 hover:bg-purple-500/10 transition-all shadow-xs"
+              title="Remote Cloud Download (Google Drive & Direct Links)"
+            >
+              <CloudDownload className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline font-semibold">Remote Leech</span>
+            </Button>
           )}
 
           {/* View mode toggle */}

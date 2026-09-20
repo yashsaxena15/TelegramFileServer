@@ -179,6 +179,48 @@ async def create_and_send_vault_otp(email: str, user_id: str, purpose: str = "Pr
     await send_email_async(email, subject, html, text)
     return {"success": True, "expires_at": expires_at.isoformat()}
 
+async def check_vault_otp(email: str, user_id: str, otp_code: str, purpose: str) -> bool:
+    """
+    Checks if the OTP is valid without consuming it yet.
+    Increments attempt counter if wrong.
+    If valid, marks the record as verified in MongoDB.
+    """
+    otp_coll = get_vault_db()["VaultOTP"]
+    now = datetime.now(timezone.utc)
+    user_id_str = str(user_id)
+
+    record = otp_coll.find_one({
+        "user_id": user_id_str,
+        "email": email.strip().lower(),
+        "purpose": purpose,
+        "expires_at": {"$gt": now}
+    })
+
+    if not record:
+        raise ValueError("Verification code expired or not found. Please request a new code.")
+
+    if record.get("attempts", 0) >= 5:
+        otp_coll.delete_one({"_id": record["_id"]})
+        raise ValueError("Too many incorrect attempts. Please request a new code.")
+
+    if record.get("otp_code") == otp_code.strip():
+        otp_coll.update_one(
+            {"_id": record["_id"]},
+            {"$set": {"verified": True, "verified_at": now}}
+        )
+        return True
+    else:
+        new_attempts = record.get("attempts", 0) + 1
+        otp_coll.update_one(
+            {"_id": record["_id"]},
+            {"$inc": {"attempts": 1}}
+        )
+        remaining = max(0, 5 - new_attempts)
+        if remaining == 0:
+            otp_coll.delete_one({"_id": record["_id"]})
+            raise ValueError("Too many incorrect attempts. Please request a new code.")
+        raise ValueError(f"Invalid verification code. {remaining} attempt(s) remaining.")
+
 async def verify_vault_otp(email: str, user_id: str, otp_code: str, purpose: str) -> bool:
     """
     Verifies the provided OTP against the database record.
@@ -202,7 +244,7 @@ async def verify_vault_otp(email: str, user_id: str, otp_code: str, purpose: str
         otp_coll.delete_one({"_id": record["_id"]})
         raise ValueError("Too many incorrect attempts. Please request a new OTP.")
 
-    if record.get("otp_code") == otp_code.strip():
+    if record.get("otp_code") == otp_code.strip() or record.get("verified") is True:
         # Successfully verified, consume the OTP
         otp_coll.delete_one({"_id": record["_id"]})
         return True
@@ -213,3 +255,4 @@ async def verify_vault_otp(email: str, user_id: str, otp_code: str, purpose: str
             {"$inc": {"attempts": 1}}
         )
         return False
+

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Home, FolderOpen, User, Settings, LogOut, Info, Download, ArrowUpDown, X, Star, Trash2, HardDrive, Inbox, Laptop } from "lucide-react";
+import { Home, FolderOpen, User, Settings, LogOut, Info, Download, ArrowUpDown, X, Star, Trash2, HardDrive, Inbox, Laptop, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { motion, AnimatePresence } from "framer-motion";
@@ -114,6 +114,7 @@ export const NavigationSidebar = ({ className }: NavigationSidebarProps) => {
     { name: "Telegram Inbox", icon: Inbox, filter: "inbox" },
     { name: "Starred", icon: Star, filter: "starred" },
     { name: "Trash", icon: Trash2, filter: "trash" },
+    { name: "Private Vault", icon: ShieldCheck, filter: "vault" },
   ];
 
   const [currentCategory, setCurrentCategory] = useState<string>("all");

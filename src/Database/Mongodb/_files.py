@@ -51,9 +51,12 @@ class Files(Collection):
         r = self.find_one({"chat_id": chat_id, "message_id": message_id, "file_unique_id": file_unique_id})
         return False if not r else True
     
-    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/", owner_id: str = None, modified_date: str = None):
+    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/", owner_id: str = None, modified_date: str = None, is_vault: bool = None):
         saved = self.check_if_exists(chat_id, message_id, file_unique_id)
         if not saved:
+            if is_vault is None:
+                is_vault = (file_path in ["/Vault", "Vault"] or str(file_path).startswith("/Vault/") or str(file_path).startswith("Vault/"))
+
             file_doc = {
                 "chat_id": chat_id,
                 "message_id": message_id,
@@ -64,7 +67,8 @@ class Files(Collection):
                 "file_name": file_name,
                 "file_caption": file_caption,
                 "file_path": file_path,  # Store file path
-                "modified_date": modified_date or datetime.utcnow().isoformat()  # Set current time if not provided
+                "modified_date": modified_date or datetime.utcnow().isoformat(),  # Set current time if not provided
+                "is_vault": bool(is_vault)
             }
             
             # Add owner_id if provided
@@ -88,12 +92,16 @@ class Files(Collection):
         file_path: str = "/Home",
         owner_id: str = None,
         modified_date: str = None,
-        part_size: int = None
+        part_size: int = None,
+        is_vault: bool = None
     ):
         """Add a multi-part file entry to the database for files > 2GB"""
         if not file_path or file_path in ["/", "Home", "/Home"]:
             file_path = "/Home"
             
+        if is_vault is None:
+            is_vault = (file_path in ["/Vault", "Vault"] or str(file_path).startswith("/Vault/") or str(file_path).startswith("Vault/"))
+
         file_doc = {
             "chat_id": chat_id,
             "message_id": parts[0]["message_id"] if parts else 0,
@@ -109,15 +117,21 @@ class Files(Collection):
             "is_split": True,
             "total_parts": len(parts),
             "part_size": part_size or (parts[0]["part_size"] if parts else 0),
-            "parts": parts
+            "parts": parts,
+            "is_vault": bool(is_vault)
         }
-        logger.info(f"Adding multi-part file '{file_name}' ({file_size} bytes, {len(parts)} parts) at path '{file_path}'")
+        logger.info(f"Adding multi-part file '{file_name}' ({file_size} bytes, {len(parts)} parts) at path '{file_path}' (is_vault={is_vault})")
         self.insert_one(file_doc)
         return True
 
-    def add_folder(self, folder_name: str, folder_path: str = "/", owner_id: str = None):
+    def add_folder(self, folder_name: str, folder_path: str = "/Home", owner_id: str = None) -> bool:
         """Add a folder entry to the database"""
-        # Normalize folder_path: root is "/Home"
+        # Disallow creating root folders "Home" or "Vault" as subfolders of /Home
+        if folder_name in ["Home", "Vault", "Private Vault", "inbox"] and (not folder_path or folder_path in ["/", "Home", "/Home"]):
+            logger.info(f"Skipping creation of root container '{folder_name}' at '{folder_path}'")
+            return False
+
+        # Ensure folder_path is properly formatted
         if not folder_path or folder_path in ["/", "Home", "/Home"]:
             folder_path = "/Home"
             path_query = {"$in": ["/Home", "/"]}
@@ -175,54 +189,40 @@ class Files(Collection):
         created_folders = []
         
         for folder_name in default_folders:
-            # Check if folder already exists
-            query = {"file_name": folder_name, "file_path": "/Home", "file_type": "folder"}
-            if owner_id:
-                query["owner_id"] = owner_id
-            existing_folder = self.find_one(query)
-            
-            if not existing_folder:
-                # Create the default folder
-                success = self.add_folder(folder_name, "/Home", owner_id)
-                if success:
-                    created_folders.append(folder_name)
-        
-        if created_folders:
-            logger.info(f"Created default folders for user {owner_id}: {created_folders}")
-        else:
-            logger.info(f"Default folders already exist for user {owner_id}")
-        
+            if self.add_folder(folder_name, "/Home", owner_id):
+                created_folders.append(folder_name)
+                
         return created_folders
-    
+
     def create_folder_path(self, full_path: str, owner_id: str = None):
         """Recursively create folder structure for a given path"""
-        # Log the parameters for debugging
         logger.info(f"create_folder_path called with full_path='{full_path}', owner_id='{owner_id}'")
         
-        # Normalize the path
         full_path = full_path.rstrip('/')
-        if not full_path or full_path == '/':
-            logger.info("Empty or root path, returning True")
+        if not full_path or full_path in ['/', '/Home', 'Home', '/Vault', 'Vault', '/inbox', 'inbox']:
+            logger.info("Root container path, returning True")
             return True
             
-        # Split path into components
-        path_parts = full_path.lstrip('/').split('/')
-        logger.info(f"Path parts: {path_parts}")
+        path_parts = [p for p in full_path.lstrip('/').split('/') if p]
+        if not path_parts:
+            return True
+
+        # Check if starting from known root container
+        if path_parts[0] in ["Home", "Vault", "inbox"]:
+            current_path = f"/{path_parts[0]}"
+            sub_parts = path_parts[1:]
+        else:
+            current_path = "/Home"
+            sub_parts = path_parts
         
-        # Create each folder in the path
-        current_path = "/"
-        for i, folder_name in enumerate(path_parts):
-            if folder_name:  # Skip empty parts
-                logger.info(f"Creating folder '{folder_name}' at path '{current_path}'")
-                # The folder's path should be the parent path, not the current path
-                # For example, for "/qwes", we create folder "qwes" with path "/"
-                success = self.add_folder(folder_name, current_path, owner_id)
-                # Update current_path for next iteration
-                if current_path == "/":
-                    current_path = f"/{folder_name}"
-                else:
-                    current_path = f"{current_path}/{folder_name}"
-                logger.info(f"Updated current_path to '{current_path}'")
+        for folder_name in sub_parts:
+            logger.info(f"Creating folder '{folder_name}' at path '{current_path}'")
+            self.add_folder(folder_name, current_path, owner_id)
+            if current_path == "/":
+                current_path = f"/{folder_name}"
+            else:
+                current_path = f"{current_path}/{folder_name}"
+            logger.info(f"Updated current_path to '{current_path}'")
                     
         return True
 
@@ -253,7 +253,8 @@ class Files(Collection):
             starred=bool(file.get("starred", False)),
             trashed=bool(file.get("trashed", False)),
             trashed_at=file.get("trashed_at"),
-            original_path=file.get("original_path")
+            original_path=file.get("original_path"),
+            is_vault=bool(file.get("is_vault", False))
         ) for file in files]
     
     def get_files_by_path(self, path: str = "/", owner_id: str = None):
@@ -266,19 +267,19 @@ class Files(Collection):
         
         # Vault path (Root)
         if path in ["vault", "/vault", "/Vault", "Vault"]:
-            query = build_query({"file_path": {"$in": ["/Vault", "Vault"]}, "is_vault": True, "trashed": {"$ne": True}})
+            query = build_query({"file_path": {"$in": ["/Vault", "Vault"]}, "trashed": {"$ne": True}})
             all_items = list(self.find(query))
         # Vault subfolders
         elif path.startswith("/Vault/") or path.startswith("Vault/"):
-            query = build_query({"file_path": path, "is_vault": True, "trashed": {"$ne": True}})
+            query = build_query({"file_path": path, "trashed": {"$ne": True}})
             all_items = list(self.find(query))
         # Trash path
         elif path in ["trash", "/trash", "/Home/Trash", "Trash", "/Trash"]:
-            query = build_query({"trashed": True, "is_vault": {"$ne": True}})
+            query = build_query({"trashed": True, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
             all_items = list(self.find(query))
         # Starred path
         elif path in ["starred", "/starred", "/Home/Starred", "Starred", "/Starred"]:
-            query = build_query({"starred": True, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
+            query = build_query({"starred": True, "trashed": {"$ne": True}, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
             all_items = list(self.find(query))
         # Telegram Inbox path
         elif path in ["inbox", "/inbox", "Telegram Inbox", "/Telegram Inbox", "/Home/Telegram Inbox", "inbox/"]:
@@ -287,7 +288,7 @@ class Files(Collection):
         # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
         elif path == "all":
             # Get all files except folders
-            files_query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
+            files_query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
             all_items = list(self.find(files_query))
         # For root path, get files with path="/" and folders with path="/"
         elif path in ["/", "Home", "/Home"]:

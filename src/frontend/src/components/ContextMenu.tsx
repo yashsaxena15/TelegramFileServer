@@ -98,6 +98,9 @@ export const ContextMenu = ({
   onToggleStar,
   isTrashMode = false,
   onRestore,
+  isVaultMode = false,
+  onMoveToVault,
+  onMoveToHome,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();

@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
   ArrowUpDown,
   ArrowUpCircle,
   ArrowDownCircle,
+  CloudDownload,
   Pause,
   Play,
   X,
@@ -16,7 +17,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  FileText
+  Folder
 } from "lucide-react";
 import { useTransferManager } from "@/hooks/useTransferManager";
 import { formatBytes } from "@/lib/utils";
@@ -27,6 +28,7 @@ export const Transfers = () => {
   const {
     uploads,
     downloads,
+    remoteTransfers,
     stats,
     pauseUpload,
     resumeUpload,
@@ -36,13 +38,14 @@ export const Transfers = () => {
     resumeDownload,
     cancelDownload,
     retryDownload,
+    cancelRemoteTransfer,
     pauseAll,
     resumeAll,
     cancelAll,
     clearCompleted
   } = useTransferManager();
 
-  const [activeTab, setActiveTab] = useState<"all" | "uploads" | "downloads" | "completed">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "uploads" | "downloads" | "remote" | "completed">("all");
 
   const formatSpeed = (bytesPerSec?: number): string => {
     if (!bytesPerSec || bytesPerSec <= 0) return "";
@@ -67,6 +70,15 @@ export const Transfers = () => {
 
   // Build unified item list
   const transferItems = [
+    ...remoteTransfers.map(r => ({
+      ...r,
+      type: "remote" as const,
+      filesize: r.filesize || 0,
+      bytesUploaded: r.transferred_bytes || 0,
+      downloaded: r.transferred_bytes || 0,
+      file: null,
+      startTime: r.created_at
+    })),
     ...uploads.map(u => ({ ...u, type: "upload" as const })),
     ...downloads.map(d => ({
       ...d,
@@ -79,18 +91,19 @@ export const Transfers = () => {
 
   // Sort: active/paused items first, then completed/failed by start time
   transferItems.sort((a, b) => {
-    const aActive = a.status === "uploading" || a.status === "downloading" || a.status === "queued" || a.status === "paused";
-    const bActive = b.status === "uploading" || b.status === "downloading" || b.status === "queued" || b.status === "paused";
+    const aActive = a.status === "uploading" || a.status === "downloading" || a.status === "uploading_tg" || a.status === "queued" || a.status === "paused";
+    const bActive = b.status === "uploading" || b.status === "downloading" || b.status === "uploading_tg" || b.status === "queued" || b.status === "paused";
     if (aActive && !bActive) return -1;
     if (!aActive && bActive) return 1;
-    const aTime = a.startTime ? new Date(a.startTime).getTime() : 0;
-    const bTime = b.startTime ? new Date(b.startTime).getTime() : 0;
+    const aTime = (a as any).startTime ? new Date((a as any).startTime).getTime() : 0;
+    const bTime = (b as any).startTime ? new Date((b as any).startTime).getTime() : 0;
     return bTime - aTime;
   });
 
   const filteredItems = transferItems.filter(item => {
     if (activeTab === "uploads") return item.type === "upload";
     if (activeTab === "downloads") return item.type === "download";
+    if (activeTab === "remote") return item.type === "remote";
     if (activeTab === "completed") return item.status === "completed";
     return true;
   });
@@ -119,7 +132,7 @@ export const Transfers = () => {
                     )}
                   </h1>
                   <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-                    Monitor and manage all uploads and downloads simultaneously
+                    Monitor and manage local uploads, downloads, and cloud-to-cloud transfers
                   </p>
                 </div>
               </div>
@@ -183,6 +196,15 @@ export const Transfers = () => {
                   All ({transferItems.length})
                 </Button>
                 <Button
+                  variant={activeTab === "remote" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setActiveTab("remote")}
+                  className="rounded-lg text-xs sm:text-sm flex items-center gap-1.5 text-purple-600 dark:text-purple-400"
+                >
+                  <CloudDownload className="w-3.5 h-3.5" />
+                  Cloud Leech ({remoteTransfers.length})
+                </Button>
+                <Button
                   variant={activeTab === "uploads" ? "default" : "ghost"}
                   size="sm"
                   onClick={() => setActiveTab("uploads")}
@@ -206,7 +228,7 @@ export const Transfers = () => {
                   onClick={() => setActiveTab("completed")}
                   className="rounded-lg text-xs sm:text-sm"
                 >
-                  Completed ({stats.completedUploads + stats.completedDownloads})
+                  Completed ({stats.completedUploads + stats.completedDownloads + (stats as any).completedRemote})
                 </Button>
               </div>
 
@@ -229,8 +251,8 @@ export const Transfers = () => {
               <h3 className="text-base font-semibold text-foreground">No transfers found</h3>
               <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
                 {activeTab === "all"
-                  ? "When you upload or download files, they will show up here in real-time."
-                  : `No ${activeTab} available at this moment.`}
+                  ? "When you initiate cloud downloads, uploads, or downloads, they will show up here live."
+                  : `No ${activeTab} items at this moment.`}
               </p>
               <div className="mt-5">
                 <Button size="sm" onClick={() => navigate("/")}>
@@ -241,14 +263,15 @@ export const Transfers = () => {
           ) : (
             <div className="flex flex-col gap-3">
               {filteredItems.map(item => {
+                const isRemote = item.type === "remote";
                 const isUpload = item.type === "upload";
-                const isTransferring = item.status === "uploading" || item.status === "downloading";
+                const isTransferring = item.status === "uploading" || item.status === "downloading" || item.status === "uploading_tg";
                 const isPaused = item.status === "paused";
                 const isCompleted = item.status === "completed";
                 const isFailed = item.status === "failed";
                 const isQueued = item.status === "queued";
 
-                const transferredBytes = isUpload ? item.bytesUploaded : (item.downloaded || 0);
+                const transferredBytes = item.bytesUploaded || (item.downloaded || 0);
                 const totalBytes = item.filesize || (item.size || 0);
                 const speedText = formatSpeed(item.speed);
                 const etaText = formatEta(item.eta);
@@ -263,10 +286,13 @@ export const Transfers = () => {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <div className={`p-2 rounded-lg shrink-0 ${
-                            isUpload ? "bg-blue-100 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400"
+                            isRemote ? "bg-purple-100 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400"
+                                     : isUpload ? "bg-blue-100 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400"
                                      : "bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400"
                           }`}>
-                            {isUpload ? (
+                            {isRemote ? (
+                              <CloudDownload className="w-5 h-5" />
+                            ) : isUpload ? (
                               <ArrowUpCircle className="w-5 h-5" />
                             ) : (
                               <ArrowDownCircle className="w-5 h-5" />
@@ -278,10 +304,11 @@ export const Transfers = () => {
                                 {item.filename}
                               </span>
                               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wider ${
-                                isUpload ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                                isRemote ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                                         : isUpload ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
                                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
                               }`}>
-                                {isUpload ? "Upload" : "Download"}
+                                {isRemote ? "Cloud Leech" : isUpload ? "Upload" : "Download"}
                               </span>
                               {/* Status Badge */}
                               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
@@ -293,6 +320,20 @@ export const Transfers = () => {
                               }`}>
                                 {item.status.toUpperCase()}
                               </span>
+                            </div>
+
+                            {/* Phase or Destination info */}
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                              {isRemote && (item as any).phase && (
+                                <span className={`font-medium ${isPaused ? "text-amber-600 dark:text-amber-400" : "text-purple-600 dark:text-purple-400"}`}>
+                                  {(item as any).phase}
+                                </span>
+                              )}
+                              {isRemote && (item as any).destination_path && (
+                                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                  <Folder className="w-3 h-3" /> {(item as any).destination_path}
+                                </span>
+                              )}
                             </div>
 
                             {/* Secondary stats */}
@@ -312,13 +353,16 @@ export const Transfers = () => {
                               {item.error && (
                                 <span className="text-red-500 font-medium">{item.error}</span>
                               )}
+                              {isRemote && (item as any).error_message && (
+                                <span className="text-red-500 font-medium">{(item as any).error_message}</span>
+                              )}
                             </div>
                           </div>
                         </div>
 
                         {/* Action buttons */}
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {isTransferring && (
+                          {!isRemote && isTransferring && (
                             <Button
                               variant="outline"
                               size="icon"
@@ -330,7 +374,7 @@ export const Transfers = () => {
                             </Button>
                           )}
 
-                          {isPaused && (
+                          {!isRemote && isPaused && (
                             <Button
                               variant="outline"
                               size="icon"
@@ -348,17 +392,25 @@ export const Transfers = () => {
                               size="icon"
                               className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
                               title="Cancel"
-                              onClick={() => isUpload ? cancelUpload(item.id) : cancelDownload(item.id)}
+                              onClick={() => {
+                                if (isRemote) {
+                                  cancelRemoteTransfer(item.id);
+                                } else if (isUpload) {
+                                  cancelUpload(item.id);
+                                } else {
+                                  cancelDownload(item.id);
+                                }
+                              }}
                             >
                               <X className="w-4 h-4" />
                             </Button>
                           )}
 
-                          {isFailed && (
+                          {isFailed && !isRemote && (
                             <Button
                               variant="outline"
                               size="icon"
-                              className="h-8 w-8 text-primary"
+                              className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/30"
                               title="Retry"
                               onClick={() => isUpload ? retryUpload(item.id) : retryDownload(item as any)}
                             >
@@ -366,32 +418,30 @@ export const Transfers = () => {
                             </Button>
                           )}
 
-                          {!isUpload && isCompleted && item.filePath && (
+                          {isCompleted && !isUpload && !isRemote && (item as any).savePath && (
                             <Button
                               variant="outline"
-                              size="sm"
-                              className="h-8 gap-1.5 text-xs"
-                              onClick={() => openDownloadedFile(item.filePath)}
+                              size="icon"
+                              className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                              title="Show in folder"
+                              onClick={() => openDownloadedFile((item as any).savePath)}
                             >
-                              <FolderOpen className="w-3.5 h-3.5" />
-                              Open
+                              <FolderOpen className="w-4 h-4" />
                             </Button>
                           )}
                         </div>
                       </div>
 
-                      {/* Progress bar */}
-                      <div className="w-full">
-                        <Progress
-                          value={item.progress}
-                          className={`h-1.5 w-full ${
-                            isPaused ? "[&>div]:bg-amber-500" :
-                            isFailed ? "[&>div]:bg-red-500" :
-                            isCompleted ? "[&>div]:bg-green-500" :
-                            ""
-                          }`}
-                        />
-                      </div>
+                      {/* Progress Bar */}
+                      <Progress
+                        value={item.progress}
+                        className={`h-1.5 w-full ${
+                          isRemote ? "[&>div]:bg-purple-500" :
+                          isPaused ? "[&>div]:bg-amber-500" :
+                          isCompleted ? "[&>div]:bg-emerald-500" :
+                          isFailed ? "[&>div]:bg-red-500" : ""
+                        }`}
+                      />
                     </div>
                   </Card>
                 );

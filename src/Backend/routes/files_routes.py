@@ -19,6 +19,7 @@ from .folders_routes import validate_folder_name
 from src.Database import database
 from d4rk.Logs import setup_logger
 from ..modules.pipeline_uploader import upload_part_task
+from ..modules.priority_manager import priority_manager
 
 # For thumbnail route
 from pyrogram import Client
@@ -472,6 +473,7 @@ async def upload_file(
         # Max Telegram single file limit for bots: 1950 MB
         PART_MAX_SIZE = 1950 * 1024 * 1024
         upload_id = secrets.token_hex(8)
+        priority_manager.notify_user_upload_started(upload_id)
         
         part_index = 1
         current_part_file = os.path.join(tg_files_dir, f"{upload_id}_part_{part_index}.tmp")
@@ -698,6 +700,9 @@ async def upload_file(
             except Exception:
                 pass
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'upload_id' in locals() and upload_id:
+            priority_manager.notify_user_upload_finished(upload_id)
 
 
 # ----------------------------------------------------
@@ -727,6 +732,7 @@ async def init_chunked_upload(
     for uid in expired_uids:
         s = _active_upload_sessions.pop(uid, None)
         if s:
+            priority_manager.notify_user_upload_finished(uid)
             for t in s.get("upload_tasks", []):
                 if not t.done():
                     t.cancel()
@@ -734,6 +740,7 @@ async def init_chunked_upload(
                 shutil.rmtree(s["dir"], ignore_errors=True)
 
     upload_id = secrets.token_hex(12)
+    priority_manager.notify_user_upload_started(upload_id)
     tg_files_dir = os.path.join(os.getcwd(), "tg_files", f"chunk_{upload_id}")
     os.makedirs(tg_files_dir, exist_ok=True)
 
@@ -775,6 +782,8 @@ async def upload_file_chunk(
     session = _active_upload_sessions.get(upload_id)
     if not session or session["user_id"] != str(user.telegram_user_id):
         raise HTTPException(status_code=404, detail="Upload session not found or expired")
+
+    priority_manager.touch_user_upload(upload_id)
 
     PART_MAX_SIZE = 1950 * 1024 * 1024
     part_idx = session["current_part_index"]
@@ -1008,6 +1017,8 @@ async def _process_upload_completion(upload_id: str, session: dict, bot_manager,
         session["error"] = str(e)
         if os.path.exists(session.get("dir", "")):
             shutil.rmtree(session["dir"], ignore_errors=True)
+    finally:
+        priority_manager.notify_user_upload_finished(upload_id)
 
 @router.post("/upload/complete")
 async def complete_chunked_upload(
@@ -1086,6 +1097,7 @@ async def abort_chunked_upload(
 ):
     upload_id = req.upload_id
     session = _active_upload_sessions.pop(upload_id, None)
+    priority_manager.notify_user_upload_finished(upload_id)
     tg_files_dir = os.path.join(os.getcwd(), "tg_files", f"chunk_{upload_id}")
 
     if session:

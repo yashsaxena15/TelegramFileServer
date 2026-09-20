@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ..security.credentials import require_auth, User
-from ..modules.email_service import create_and_send_vault_otp, verify_vault_otp, get_vault_db
+from ..modules.email_service import create_and_send_vault_otp, check_vault_otp, verify_vault_otp, get_vault_db
 from src.Config import SESSION_SECRET_KEY
 from src.Database import database
 
@@ -26,6 +26,11 @@ VAULT_INACTIVITY_TIMEOUT = 900
 # Pydantic Request Models
 class RequestEmailOtpModel(BaseModel):
     email: str
+
+class VerifyOtpModel(BaseModel):
+    otp_code: str
+    purpose: str = "Private Vault Setup"
+    email: Optional[str] = None
 
 class VerifyAndCreateModel(BaseModel):
     email: str
@@ -135,6 +140,35 @@ async def request_setup_otp(body: RequestEmailOtpModel, user: User = Depends(req
     except Exception as e:
         logger.error(f"Failed to send setup OTP: {e}")
         raise HTTPException(status_code=500, detail="Failed to dispatch verification email. Please try again.")
+
+
+@router.post("/verify-otp")
+async def verify_vault_otp_endpoint(body: VerifyOtpModel, user: User = Depends(require_auth)):
+    """Validates the OTP code immediately before allowing the user to proceed to PIN creation."""
+    user_id = str(user.telegram_user_id or user.username or "admin")
+    email = (body.email or "").strip().lower()
+
+    if not email:
+        vault_coll = get_vault_db()["VaultConfig"]
+        config = vault_coll.find_one({"user_id": user_id})
+        if config and config.get("email"):
+            email = config["email"].strip().lower()
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Recovery email address is required.")
+
+    otp_code = body.otp_code.strip()
+    if not re.match(r"^\d{6}$", otp_code):
+        raise HTTPException(status_code=400, detail="Please enter a valid 6-digit verification code.")
+
+    try:
+        await check_vault_otp(email, user_id, otp_code, purpose=body.purpose)
+        return {"success": True, "message": "Verification code confirmed."}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Error checking OTP: {e}")
+        raise HTTPException(status_code=500, detail="Failed to verify code. Please try again.")
 
 
 @router.post("/setup/verify-and-create")

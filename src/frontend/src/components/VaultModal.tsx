@@ -170,14 +170,22 @@ export const VaultModal: React.FC<VaultModalProps> = ({
     }
   };
 
-  const handleVerifySetupOtp = (e: React.FormEvent) => {
+  const handleVerifySetupOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (otpCode.length !== 6) {
       setErrorMsg("Please enter the complete 6-digit verification code.");
       return;
     }
+    setLoading(true);
     setErrorMsg("");
-    setMode("setup_pin");
+    try {
+      await api.verifyVaultOtp(otpCode, "Private Vault Setup", email);
+      setMode("setup_pin");
+    } catch (err: any) {
+      setErrorMsg(err.message || "Invalid verification code.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCompleteSetup = async (e: React.FormEvent) => {
@@ -229,16 +237,24 @@ export const VaultModal: React.FC<VaultModalProps> = ({
     }
   };
 
-  const handleVerifyForgotOtp = (e: React.FormEvent) => {
+  const handleVerifyForgotOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (otpCode.length !== 6) {
       setErrorMsg("Please enter the complete 6-digit code.");
       return;
     }
+    setLoading(true);
     setErrorMsg("");
-    setPin("");
-    setConfirmPin("");
-    setMode("forgot_new_pin");
+    try {
+      await api.verifyVaultOtp(otpCode, "Vault PIN Reset");
+      setPin("");
+      setConfirmPin("");
+      setMode("forgot_new_pin");
+    } catch (err: any) {
+      setErrorMsg(err.message || "Invalid verification code.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCompleteResetPin = async (e: React.FormEvent) => {

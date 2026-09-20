@@ -18,7 +18,9 @@ async def upload_part_task(
     caption: Optional[str] = None,
     semaphore: Optional[asyncio.Semaphore] = None,
     is_single_part: bool = False,
-    file_type: str = "document"
+    file_type: str = "document",
+    progress: Optional[Any] = None,
+    progress_args: Optional[tuple] = ()
 ) -> Dict[str, Any]:
     """
     Asynchronously uploads a file part to Telegram using the least busy bot,
@@ -41,27 +43,36 @@ async def upload_part_task(
 
         ext = file_name.split(".")[-1].lower() if "." in file_name else ""
         msg = None
+        target_file_name = file_name if is_single_part else f"{file_name}.part{part_index}"
+
+        upload_kwargs = {}
+        if progress:
+            upload_kwargs["progress"] = progress
+            if progress_args:
+                upload_kwargs["progress_args"] = progress_args
 
         if is_single_part:
             try:
                 if ext in ["jpg", "jpeg", "png", "gif", "webp"] and part_size <= 10 * 1024 * 1024:
-                    msg = await client.send_photo(chat_id=chat_id, photo=part_file_path, caption=caption)
+                    msg = await client.send_photo(chat_id=chat_id, photo=part_file_path, caption=caption, **upload_kwargs)
                 elif ext in ["mp4", "mkv", "avi", "mov", "webm"]:
-                    msg = await client.send_video(chat_id=chat_id, video=part_file_path, caption=caption)
+                    msg = await client.send_video(chat_id=chat_id, video=part_file_path, caption=caption, file_name=target_file_name, **upload_kwargs)
                 elif ext in ["mp3", "wav", "ogg", "flac", "m4a"]:
-                    msg = await client.send_audio(chat_id=chat_id, audio=part_file_path, caption=caption)
+                    msg = await client.send_audio(chat_id=chat_id, audio=part_file_path, caption=caption, file_name=target_file_name, **upload_kwargs)
                 else:
-                    msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=caption, force_document=True)
+                    msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=caption, file_name=target_file_name, force_document=True, **upload_kwargs)
             except Exception as e:
                 logger.warning(f"[PIPELINE_UPLOAD] Specialized upload fallback to document: {e}")
-                msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=caption, force_document=True)
+                msg = await client.send_document(chat_id=chat_id, document=part_file_path, caption=caption, file_name=target_file_name, force_document=True, **upload_kwargs)
         else:
             # Multi-part chunk parts MUST always be sent as raw documents so Telegram does not re-encode them
             msg = await client.send_document(
                 chat_id=chat_id,
                 document=part_file_path,
                 caption=caption,
-                force_document=True
+                file_name=target_file_name,
+                force_document=True,
+                **upload_kwargs
             )
 
         media = msg.document or msg.video or msg.audio or msg.photo or msg.voice

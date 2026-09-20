@@ -1,29 +1,31 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTransferManager } from "@/hooks/useTransferManager";
+import { formatBytes } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  CloudDownload,
   Pause,
   Play,
   X,
-  RotateCcw,
   ChevronDown,
   ChevronUp,
   ExternalLink
 } from "lucide-react";
-import { useTransferManager } from "@/hooks/useTransferManager";
-import { formatBytes } from "@/lib/utils";
 
 export const TransfersWidget = () => {
   const navigate = useNavigate();
   const {
     uploads,
     downloads,
+    remoteTransfers,
     activeUploads,
     activeDownloads,
+    activeRemote,
     totalActiveCount,
     stats,
     pauseUpload,
@@ -32,6 +34,7 @@ export const TransfersWidget = () => {
     pauseDownload,
     resumeDownload,
     cancelDownload,
+    cancelRemoteTransfer,
     pauseAll,
     resumeAll
   } = useTransferManager();
@@ -46,21 +49,29 @@ export const TransfersWidget = () => {
     }
   }, [totalActiveCount]);
 
-  // Combine items for widget view (limit to top 5)
+  // Combine items for widget view (limit to top 6)
   const allItems = [
+    ...remoteTransfers.map(r => ({
+      ...r,
+      type: "remote" as const,
+      filesize: r.filesize || 0,
+      bytesUploaded: r.transferred_bytes || 0,
+      downloaded: r.transferred_bytes || 0
+    })),
     ...uploads.map(u => ({ ...u, type: "upload" as const })),
     ...downloads.map(d => ({
       ...d,
       type: "download" as const,
       filesize: d.size || 0,
-      bytesUploaded: d.downloaded || 0
+      bytesUploaded: d.downloaded || 0,
+      downloaded: d.downloaded || 0
     }))
   ];
 
   // Show only if there are active items, or if recently expanded
   const recentItems = allItems
-    .filter(i => i.status === "uploading" || i.status === "downloading" || i.status === "paused" || i.status === "queued")
-    .slice(0, 5);
+    .filter(i => i.status === "uploading" || i.status === "downloading" || i.status === "uploading_tg" || i.status === "paused" || i.status === "queued")
+    .slice(0, 6);
 
   if (recentItems.length === 0 && !isExpanded) {
     return null;
@@ -89,6 +100,11 @@ export const TransfersWidget = () => {
           <span className="font-semibold text-xs text-foreground">
             Transfers {totalActiveCount > 0 ? `(${totalActiveCount} active)` : ""}
           </span>
+          {activeRemote.length > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-600 dark:text-purple-400 font-medium flex items-center gap-0.5 border border-purple-500/20">
+              <CloudDownload className="w-2.5 h-2.5" /> {activeRemote.length}
+            </span>
+          )}
           {activeUploads.length > 0 && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 font-medium flex items-center gap-0.5 border border-blue-500/20">
               <ArrowUp className="w-2.5 h-2.5" /> {activeUploads.length}
@@ -138,9 +154,9 @@ export const TransfersWidget = () => {
             size="icon"
             className="h-7 w-7 text-muted-foreground hover:text-foreground"
             onClick={() => setIsDismissed(true)}
-            title="Close"
+            title="Dismiss widget"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-4 h-4" />
           </Button>
         </div>
       </div>
@@ -152,10 +168,11 @@ export const TransfersWidget = () => {
             <p className="text-center text-xs text-muted-foreground py-4">No active transfers</p>
           ) : (
             recentItems.map(item => {
+              const isRemote = item.type === "remote";
               const isUpload = item.type === "upload";
-              const isTransferring = item.status === "uploading" || item.status === "downloading";
+              const isTransferring = item.status === "uploading" || item.status === "downloading" || item.status === "uploading_tg";
               const isPaused = item.status === "paused";
-              const transferred = isUpload ? item.bytesUploaded : (item.downloaded || 0);
+              const transferred = item.bytesUploaded || (item.downloaded || 0);
               const total = item.filesize || (item.size || 0);
 
               return (
@@ -166,17 +183,41 @@ export const TransfersWidget = () => {
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <div className="flex items-center gap-1.5 min-w-0 flex-1">
                       <span className={`p-1 rounded shrink-0 ${
-                        isUpload ? "bg-blue-500/15 text-blue-600 dark:text-blue-400" : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        isRemote
+                          ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+                          : isUpload
+                          ? "bg-blue-500/15 text-blue-600 dark:text-blue-400"
+                          : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                       }`}>
-                        {isUpload ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                        {isRemote ? (
+                          <CloudDownload className="w-3 h-3" />
+                        ) : isUpload ? (
+                          <ArrowUp className="w-3 h-3" />
+                        ) : (
+                          <ArrowDown className="w-3 h-3" />
+                        )}
                       </span>
-                      <span className="text-xs font-medium text-foreground truncate">
-                        {item.filename}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium text-foreground truncate flex items-center gap-1.5">
+                          {item.filename || item.name}
+                          {isRemote && (
+                            <span className={`text-[9px] px-1 py-0.2 rounded font-normal ${
+                              isPaused ? "bg-amber-500/20 text-amber-500" : "bg-purple-500/20 text-purple-400"
+                            }`}>
+                              {isPaused ? "Paused" : "Cloud Leech"}
+                            </span>
+                          )}
+                        </div>
+                        {isRemote && (item as any).phase && (
+                          <div className={`text-[10px] truncate ${isPaused ? "text-amber-500 font-medium" : "text-muted-foreground"}`}>
+                            {(item as any).phase}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      {isTransferring && (
+                      {!isRemote && isTransferring && (
                         <button
                           className="p-1 text-muted-foreground hover:text-foreground rounded"
                           onClick={() => isUpload ? pauseUpload(item.id) : pauseDownload(item.id)}
@@ -185,7 +226,7 @@ export const TransfersWidget = () => {
                           <Pause className="w-3.5 h-3.5" />
                         </button>
                       )}
-                      {isPaused && (
+                      {!isRemote && isPaused && (
                         <button
                           className="p-1 text-primary hover:text-primary/80 rounded"
                           onClick={() => isUpload ? resumeUpload(item.id) : resumeDownload(item.id)}
@@ -196,7 +237,15 @@ export const TransfersWidget = () => {
                       )}
                       <button
                         className="p-1 text-red-500 hover:text-red-600 rounded"
-                        onClick={() => isUpload ? cancelUpload(item.id) : cancelDownload(item.id)}
+                        onClick={() => {
+                          if (isRemote) {
+                            cancelRemoteTransfer(item.id);
+                          } else if (isUpload) {
+                            cancelUpload(item.id);
+                          } else {
+                            cancelDownload(item.id);
+                          }
+                        }}
                         title="Cancel"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -207,13 +256,13 @@ export const TransfersWidget = () => {
                   {/* Progress Bar */}
                   <Progress
                     value={item.progress}
-                    className={`h-1 w-full ${isPaused ? "[&>div]:bg-amber-500" : ""}`}
+                    className={`h-1 w-full ${isPaused ? "[&>div]:bg-amber-500" : isRemote ? "[&>div]:bg-purple-500" : ""}`}
                   />
 
                   {/* Stats */}
                   <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
                     <span>
-                      {Math.round(item.progress)}% • {formatBytes(transferred)} of {formatBytes(total)}
+                      {Math.round(item.progress)}% {total > 0 ? `• ${formatBytes(transferred)} of ${formatBytes(total)}` : (transferred > 0 ? `• ${formatBytes(transferred)}` : "")}
                     </span>
                     {isTransferring && item.speed ? (
                       <span>{formatSpeed(item.speed)}</span>

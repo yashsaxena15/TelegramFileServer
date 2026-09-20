@@ -1129,6 +1129,20 @@ export const api = {
         return response.json();
     },
 
+    async verifyVaultOtp(otp_code: string, purpose: string = 'Private Vault Setup', email?: string): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/verify-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ otp_code, purpose, email }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Invalid verification code');
+        }
+        return response.json();
+    },
+
     async verifyAndCreateVault(email: string, otp_code: string, pin: string): Promise<{ success: boolean; message: string }> {
         const response = await fetchWithTimeout(`${getApiBaseUrl()}/vault/setup/verify-and-create`, {
             method: 'POST',
@@ -1234,6 +1248,59 @@ export const api = {
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to create folder in Vault');
+        }
+        return response.json();
+    },
+
+    async addRemoteTransfer(url: string, destination_path: string = '/Home'): Promise<{ success: boolean; message: string; count: number; tasks: any[] }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ url, destination_path }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to start remote transfer');
+        }
+        return response.json();
+    },
+
+    async getRemoteTasks(): Promise<{ tasks: any[] }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/tasks`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            return { tasks: [] };
+        }
+        return response.json();
+    },
+
+    async cancelRemoteTask(task_id: string): Promise<{ success: boolean; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ task_id }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to cancel remote transfer');
+        }
+        return response.json();
+    },
+
+    async clearCompletedRemoteTasks(): Promise<{ success: boolean; cleared_count: number }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/clear-completed`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to clear completed tasks');
         }
         return response.json();
     },

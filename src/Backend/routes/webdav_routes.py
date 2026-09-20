@@ -266,7 +266,8 @@ async def handle_propfind(request: Request, segments: List[str], owner_id: str) 
                 items = list(database.Files.find({
                     "starred": True,
                     "owner_id": owner_id,
-                    "trashed": {"$ne": True}
+                    "trashed": {"$ne": True},
+                    "is_vault": {"$ne": True}
                 }))
                 for item in items:
                     iname = item.get("file_name", "Item")
@@ -284,7 +285,8 @@ async def handle_propfind(request: Request, segments: List[str], owner_id: str) 
             elif top_name == "Trash":
                 items = list(database.Files.find({
                     "trashed": True,
-                    "owner_id": owner_id
+                    "owner_id": owner_id,
+                    "is_vault": {"$ne": True}
                 }))
                 for item in items:
                     iname = item.get("file_name", "Item")
@@ -533,7 +535,8 @@ def get_directory_items(segments: List[str], owner_id: str) -> Tuple[bool, List[
             items_cursor = list(database.Files.find({
                 "starred": True,
                 "owner_id": owner_id,
-                "trashed": {"$ne": True}
+                "trashed": {"$ne": True},
+                "is_vault": {"$ne": True}
             }))
             for it in items_cursor:
                 fname = it.get("file_name", "Item")
@@ -550,7 +553,8 @@ def get_directory_items(segments: List[str], owner_id: str) -> Tuple[bool, List[
         elif top_name == "Trash":
             items_cursor = list(database.Files.find({
                 "trashed": True,
-                "owner_id": owner_id
+                "owner_id": owner_id,
+                "is_vault": {"$ne": True}
             }))
             for it in items_cursor:
                 fname = it.get("file_name", "Item")
