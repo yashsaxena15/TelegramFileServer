@@ -134,12 +134,39 @@ async def move_file_route(request: MoveFileRequest, user: User = Depends(require
             {"$set": update_fields}
         )
         
-        # If moving a folder, update all descendant items is_vault status
+        # If moving a folder, update all descendant items file_path and is_vault
         if file_data.get("file_type") == "folder":
-            old_full_path = f"{file_data.get('file_path', '').rstrip('/')}/{file_data.get('file_name', '')}"
+            old_parent = file_data.get('file_path', '').rstrip('/')
+            folder_name = file_data.get('file_name', '')
+            old_full_path = f"{old_parent}/{folder_name}" if old_parent else f"/{folder_name}"
+            new_parent = request.target_path.rstrip('/')
+            new_full_path = f"{new_parent}/{folder_name}" if new_parent else f"/{folder_name}"
+            now_iso = datetime.datetime.utcnow().isoformat()
+
+            # 1. Update direct children
             database.Files.update_many(
-                {"file_path": {"$regex": f"^{re.escape(old_full_path)}(/.*)?$"}},
-                {"$set": {"is_vault": is_target_vault}}
+                {"file_path": old_full_path, "owner_id": user_id},
+                {"$set": {
+                    "file_path": new_full_path,
+                    "is_vault": is_target_vault,
+                    "modified_date": now_iso
+                }}
+            )
+
+            # 2. Update nested descendants
+            database.Files.update_many(
+                {"file_path": {"$regex": f"^{re.escape(old_full_path)}/"}, "owner_id": user_id},
+                [{"$set": {
+                    "file_path": {
+                        "$replaceOne": {
+                            "input": "$file_path",
+                            "find": old_full_path,
+                            "replacement": new_full_path
+                        }
+                    },
+                    "is_vault": is_target_vault,
+                    "modified_date": now_iso
+                }}]
             )
         
         return {"message": "File moved successfully"}
@@ -169,11 +196,39 @@ async def copy_file_route(request: CopyFileRequest, user: User = Depends(require
         # Preserve the owner when copying
         new_file_data["owner_id"] = user_id
         
-        # For copied files, we need to handle the unique ID properly
-        # For now, we'll keep the same file_unique_id since it refers to the Telegram file
-        # In a real implementation, you might want to duplicate the file in Telegram as well
-        
         database.Files.insert_one(new_file_data)
+
+        # If copying a folder, recursively duplicate all descendants with updated paths
+        if file_data.get("file_type") == "folder":
+            old_parent = file_data.get('file_path', '').rstrip('/')
+            folder_name = file_data.get('file_name', '')
+            old_full_path = f"{old_parent}/{folder_name}" if old_parent else f"/{folder_name}"
+            new_parent = request.target_path.rstrip('/')
+            new_full_path = f"{new_parent}/{folder_name}" if new_parent else f"/{folder_name}"
+            now_iso = datetime.datetime.utcnow().isoformat()
+            is_target_vault = request.target_path.startswith("/Vault") or request.target_path == "Vault"
+
+            descendants = list(database.Files.find({
+                "$or": [
+                    {"file_path": old_full_path},
+                    {"file_path": {"$regex": f"^{re.escape(old_full_path)}/"}}
+                ],
+                "owner_id": user_id
+            }))
+            new_descendants = []
+            for desc in descendants:
+                copied_desc = desc.copy()
+                copied_desc["_id"] = ObjectId()
+                copied_desc["owner_id"] = user_id
+                copied_desc["modified_date"] = now_iso
+                copied_desc["is_vault"] = is_target_vault
+                if copied_desc["file_path"] == old_full_path:
+                    copied_desc["file_path"] = new_full_path
+                else:
+                    copied_desc["file_path"] = copied_desc["file_path"].replace(old_full_path, new_full_path, 1)
+                new_descendants.append(copied_desc)
+            if new_descendants:
+                database.Files.insert_many(new_descendants)
         
         return {"message": "File copied successfully", "new_file_id": str(new_file_data["_id"])}
     except Exception as e:

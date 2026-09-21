@@ -448,11 +448,30 @@ async def move_into_vault(request: Request, body: MoveVaultItemModel, user: User
 
     # If it was a folder, move its nested children into vault too
     if item.get("file_type") == "folder":
-        old_full_path = f"{item.get('file_path', '').rstrip('/')}/{item.get('file_name', '')}"
-        new_full_path = f"{target_path.rstrip('/')}/{item.get('file_name', '')}"
+        old_parent = item.get('file_path', '').rstrip('/')
+        folder_name = item.get('file_name', '')
+        old_full_path = f"{old_parent}/{folder_name}" if old_parent else f"/{folder_name}"
+        new_parent = target_path.rstrip('/')
+        new_full_path = f"{new_parent}/{folder_name}" if new_parent else f"/{folder_name}"
+
+        # 1. Update direct children
         database.Files.update_many(
-            {"file_path": {"$regex": f"^{re.escape(old_full_path)}(/.*)?$"}},
-            {"$set": {"is_vault": True}}
+            {"file_path": old_full_path},
+            {"$set": {"file_path": new_full_path, "is_vault": True}}
+        )
+        # 2. Update nested descendants
+        database.Files.update_many(
+            {"file_path": {"$regex": f"^{re.escape(old_full_path)}/"}},
+            [{"$set": {
+                "file_path": {
+                    "$replaceOne": {
+                        "input": "$file_path",
+                        "find": old_full_path,
+                        "replacement": new_full_path
+                    }
+                },
+                "is_vault": True
+            }}]
         )
 
     return {"success": True, "message": f"Moved to Vault ({target_path})"}
@@ -480,10 +499,30 @@ async def move_out_of_vault(request: Request, body: MoveVaultItemModel, user: Us
     )
 
     if item.get("file_type") == "folder":
-        old_full_path = f"{item.get('file_path', '').rstrip('/')}/{item.get('file_name', '')}"
+        old_parent = item.get('file_path', '').rstrip('/')
+        folder_name = item.get('file_name', '')
+        old_full_path = f"{old_parent}/{folder_name}" if old_parent else f"/{folder_name}"
+        new_parent = target_path.rstrip('/')
+        new_full_path = f"{new_parent}/{folder_name}" if new_parent else f"/{folder_name}"
+
+        # 1. Update direct children
         database.Files.update_many(
-            {"file_path": {"$regex": f"^{re.escape(old_full_path)}(/.*)?$"}},
-            {"$set": {"is_vault": False}}
+            {"file_path": old_full_path},
+            {"$set": {"file_path": new_full_path, "is_vault": False}}
+        )
+        # 2. Update nested descendants
+        database.Files.update_many(
+            {"file_path": {"$regex": f"^{re.escape(old_full_path)}/"}},
+            [{"$set": {
+                "file_path": {
+                    "$replaceOne": {
+                        "input": "$file_path",
+                        "find": old_full_path,
+                        "replacement": new_full_path
+                    }
+                },
+                "is_vault": False
+            }}]
         )
 
     return {"success": True, "message": f"Moved to {target_path}"}
