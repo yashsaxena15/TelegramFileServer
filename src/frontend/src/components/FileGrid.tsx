@@ -20,6 +20,7 @@ import { PropertiesDialog } from "./PropertiesDialog";
 import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { getPlayerPreference } from "@/lib/playerSettings";
 import { useBatchThumbnailLoader } from "@/hooks/useBatchThumbnailLoader"; // Add this import
+import { useIsMobile } from "@/hooks/use-mobile";
 import { toast } from "sonner";
 import { trackArchiveTask } from "@/lib/archiveTracker";
 import {
