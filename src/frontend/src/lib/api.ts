@@ -1304,4 +1304,29 @@ export const api = {
         }
         return response.json();
     },
+
+    async getMediaCacheStats(): Promise<any> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/media/cache/stats`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            return null;
+        }
+        return response.json();
+    },
+
+    async clearMediaCache(): Promise<{ success: boolean; freed_bytes: number; freed_formatted: string; stats: any }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/media/cache/clear`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to clear media cache');
+        }
+        return response.json();
+    },
 };

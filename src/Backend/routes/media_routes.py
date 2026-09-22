@@ -472,3 +472,35 @@ async def media_transcode_stream(
             "X-Content-Type-Options": "nosniff",
         }
     )
+
+
+@router.get("/cache/stats")
+async def get_media_cache_stats(request: Request):
+    """Get real-time statistics of the 25GB Tier-2 SSD Media Cache."""
+    try:
+        user = require_auth(request)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    from ..modules.disk_cache_manager import DISK_CACHE_MANAGER
+    stats = DISK_CACHE_MANAGER.get_stats()
+    return JSONResponse(stats)
+
+
+@router.post("/cache/clear")
+async def clear_media_cache(request: Request):
+    """Manually clear the 25GB Media Cache to immediately reclaim disk space."""
+    try:
+        user = require_auth(request)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    from ..modules.disk_cache_manager import DISK_CACHE_MANAGER
+    freed_bytes = DISK_CACHE_MANAGER.clear_all()
+    stats = DISK_CACHE_MANAGER.get_stats()
+    return JSONResponse({
+        "success": True,
+        "freed_bytes": freed_bytes,
+        "freed_formatted": f"{freed_bytes / (1024**2):.2f} MB",
+        "stats": stats,
+    })

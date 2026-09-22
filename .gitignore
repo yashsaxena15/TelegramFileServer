@@ -20,3 +20,5 @@ dist/
 *.tsbuildinfo
 temp_archives/
 **/temp_archives/
+cache/
+**/cache/

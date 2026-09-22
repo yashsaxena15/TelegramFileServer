@@ -15,6 +15,7 @@ from .streaming_utils import get_file_ids
 
 from collections import OrderedDict
 import threading
+from .disk_cache_manager import DISK_CACHE_MANAGER
 
 LOGGER = setup_logger(__name__)
 
@@ -87,6 +88,10 @@ class ByteStreamer:
         self.client: Client = client
         self.__cached_file_ids: Dict[int, FileId] = {}
         asyncio.create_task(self.clean_cache())
+        try:
+            DISK_CACHE_MANAGER.start_background_cleaner()
+        except Exception:
+            pass
 
     async def get_file_properties(self, chat_id: int, message_id: int, client: Client = None) -> FileId:
         c = client or self.client
@@ -130,12 +135,19 @@ class ByteStreamer:
             last_part_cut = (part_until % chunk_size) + 1
             part_count = math.ceil((part_until + 1) / chunk_size) - math.floor(offset / chunk_size)
 
-            # Instant RAM Cache Fast-Path: if all chunks are in memory, yield with 0ms latency
+            # Instant Multi-Tier Cache Fast-Path: L1 (RAM) -> L2 (SSD Disk)
             all_cached = True
             cached_chunks = {}
             for seq in range(1, part_count + 1):
                 p_offset = offset + (seq - 1) * chunk_size
+                # 1. Check L1 RAM Cache
                 c_data = GLOBAL_CHUNK_CACHE.get(chat_id, message_id, p_offset, chunk_size)
+                if c_data is None:
+                    # 2. Check L2 SSD Disk Cache
+                    c_data = DISK_CACHE_MANAGER.get(chat_id, message_id, p_offset, chunk_size)
+                    if c_data is not None:
+                        GLOBAL_CHUNK_CACHE.put(chat_id, message_id, p_offset, chunk_size, c_data)
+
                 if c_data is not None:
                     cached_chunks[seq] = c_data
                 else:
@@ -143,7 +155,7 @@ class ByteStreamer:
                     break
 
             if all_cached:
-                LOGGER.debug(f"Part {part_idx_num} (bytes {part_from}-{part_until}) served instantly from RAM cache")
+                LOGGER.debug(f"Part {part_idx_num} (bytes {part_from}-{part_until}) served instantly from L1/L2 Cache")
                 for seq in range(1, part_count + 1):
                     chunk = cached_chunks[seq]
                     if part_count == 1:
@@ -215,12 +227,18 @@ class ByteStreamer:
             PREFETCH_COUNT = max(2, min(num_workers, 4))
 
             async def fetch_part_chunk(chunk_seq: int, chunk_offset: int) -> bytes:
-                # 1. Check RAM Chunk Cache for 0ms instant seeking/rewind
+                # 1. Check L1 RAM Chunk Cache for 0ms instant seeking/rewind
                 cached = GLOBAL_CHUNK_CACHE.get(chat_id, message_id, chunk_offset, chunk_size)
                 if cached is not None:
                     return cached
 
-                # 2. Fetch from Telegram MTProto
+                # 2. Check L2 SSD Disk Cache
+                disk_cached = DISK_CACHE_MANAGER.get(chat_id, message_id, chunk_offset, chunk_size)
+                if disk_cached is not None:
+                    GLOBAL_CHUNK_CACHE.put(chat_id, message_id, chunk_offset, chunk_size, disk_cached)
+                    return disk_cached
+
+                # 3. Fetch from Telegram MTProto
                 for attempt in range(min(3, num_workers)):
                     w_c, sess, loc = worker_sessions[(chunk_seq - 1 + attempt) % num_workers]
                     try:
@@ -233,7 +251,15 @@ class ByteStreamer:
                         if isinstance(r, raw.types.upload.File):
                             chunk_data = r.bytes
                             if chunk_data:
+                                # Save to L1 RAM Cache
                                 GLOBAL_CHUNK_CACHE.put(chat_id, message_id, chunk_offset, chunk_size, chunk_data)
+                                # Asynchronously persist to L2 SSD cache in background
+                                is_header = (chunk_offset == 0 or chunk_seq == 1 or chunk_seq == part_count)
+                                asyncio.create_task(
+                                    DISK_CACHE_MANAGER.put_async(
+                                        chat_id, message_id, chunk_offset, chunk_size, chunk_data, is_header=is_header
+                                    )
+                                )
                             return chunk_data
                     except (TimeoutError, OSError, asyncio.TimeoutError) as e:
                         if attempt == min(3, num_workers) - 1:
@@ -327,13 +353,19 @@ class ByteStreamer:
         PREFETCH_COUNT = max(2, min(num_workers, 4))
 
         async def fetch_chunk(part_idx: int, part_offset: int) -> bytes:
-            # 1. Check RAM Chunk Cache for 0ms instant seeking/rewind
+            # 1. Check L1 RAM Chunk Cache for 0ms instant seeking/rewind
             fid_id = getattr(file_id, 'media_id', 0)
             cached = GLOBAL_CHUNK_CACHE.get(fid_id, 0, part_offset, chunk_size)
             if cached is not None:
                 return cached
 
-            # 2. Fetch from Telegram MTProto
+            # 2. Check L2 SSD Disk Cache
+            disk_cached = DISK_CACHE_MANAGER.get(fid_id, 0, part_offset, chunk_size)
+            if disk_cached is not None:
+                GLOBAL_CHUNK_CACHE.put(fid_id, 0, part_offset, chunk_size, disk_cached)
+                return disk_cached
+
+            # 3. Fetch from Telegram MTProto
             for attempt in range(min(3, num_workers)):
                 w_c, sess, loc = worker_sessions[(part_idx - 1 + attempt) % num_workers]
                 try:
@@ -347,6 +379,12 @@ class ByteStreamer:
                         chunk_data = r.bytes
                         if chunk_data:
                             GLOBAL_CHUNK_CACHE.put(fid_id, 0, part_offset, chunk_size, chunk_data)
+                            is_header = (part_offset == 0 or part_idx == 1 or part_idx == part_count)
+                            asyncio.create_task(
+                                DISK_CACHE_MANAGER.put_async(
+                                    fid_id, 0, part_offset, chunk_size, chunk_data, is_header=is_header
+                                )
+                            )
                         return chunk_data
                 except (TimeoutError, OSError, asyncio.TimeoutError) as e:
                     if attempt == min(3, num_workers) - 1:

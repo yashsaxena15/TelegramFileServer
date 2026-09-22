@@ -17,6 +17,7 @@ services:
       - ./src/Database:/app/src/Database
       - ./src/Config:/app/src/Config
       - ./src/Telegram:/app/src/Telegram
+      - ./cache:/app/cache
       - ./.env:/app/.env
     depends_on:
       - mongo
