@@ -1451,10 +1451,64 @@ async def handle_delete(request: Request, segments: List[str], owner_id: str) ->
     target_name = segments[-1]
 
     if top_name == "Trash":
-        # Permanently purge from database
+        # Permanently purge from database and delete Telegram messages
         item = database.Files.find_one({"file_name": target_name, "trashed": True, "owner_id": owner_id})
         if item:
+            from collections import defaultdict
+            messages_to_delete = defaultdict(set)
+            
+            def collect_file_messages(doc):
+                c_id = doc.get("chat_id")
+                m_id = doc.get("message_id")
+                if c_id and m_id:
+                    messages_to_delete[c_id].add(m_id)
+                if doc.get("is_split"):
+                    for part in doc.get("parts", []):
+                        p_mid = part.get("message_id")
+                        if p_mid and c_id:
+                            messages_to_delete[c_id].add(p_mid)
+
+            if item.get("file_type") == "folder":
+                folder_name = item.get("file_name", "")
+                orig_path = item.get("original_path") or item.get("file_path", "/")
+                if orig_path in ["/", ""]:
+                    f_full = f"/{folder_name}"
+                else:
+                    f_full = f"{orig_path.rstrip('/')}/{folder_name}"
+                
+                content_query = {
+                    "$or": [
+                        {"file_path": f_full},
+                        {"file_path": {"$regex": f"^{re.escape(f_full)}/"}}
+                    ],
+                    "owner_id": owner_id
+                }
+                for child_doc in database.Files.find(content_query):
+                    collect_file_messages(child_doc)
+                database.Files.delete_many(content_query)
+            else:
+                collect_file_messages(item)
+            
             database.Files.delete_one({"_id": item["_id"]})
+
+            if messages_to_delete:
+                try:
+                    bot_manager = getattr(request.app.state, 'bot_manager', None)
+                    client = bot_manager.get_least_busy_client() if (bot_manager and hasattr(bot_manager, 'get_least_busy_client')) else None
+                    if not client and bot_manager and hasattr(bot_manager, 'client_list') and bot_manager.client_list:
+                        client = bot_manager.client_list[0]
+                    if client:
+                        for c_id, m_ids in messages_to_delete.items():
+                            m_list = list(m_ids)
+                            for i in range(0, len(m_list), 100):
+                                batch = m_list[i:i+100]
+                                try:
+                                    await client.delete_messages(chat_id=c_id, message_ids=batch)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
         return Response(status_code=204)
 
     # For Home or Telegram Inbox: Move to Trash

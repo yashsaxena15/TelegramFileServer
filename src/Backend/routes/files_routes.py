@@ -313,15 +313,13 @@ async def delete_file_route(
             
             # Construct the exact folder path safely
             if folder_path in ["/", ""]:
-                exact_path = f"/Home/{folder_name}"
-            elif folder_path.startswith("/Home"):
-                exact_path = f"{folder_path.rstrip('/')}/{folder_name}"
+                exact_path = f"/{folder_name}"
             else:
-                exact_path = f"/Home/{folder_path.strip('/')}/{folder_name}"
+                exact_path = f"{folder_path.rstrip('/')}/{folder_name}"
             
-            # Additional safety guard: If exact_path resolves to root, reject
-            if exact_path in ["/", "/Home", "Home", ""]:
-                raise HTTPException(status_code=400, detail="Cannot delete root path.")
+            # Additional safety guard: If exact_path resolves to root container, reject
+            if exact_path in ["/", "/Home", "Home", "/Vault", "Vault", "/inbox", "inbox", "/Telegram Inbox", "Telegram Inbox", ""]:
+                raise HTTPException(status_code=400, detail="Root folder cannot be deleted.")
             
             paths_to_delete = [exact_path]
             
@@ -968,9 +966,17 @@ async def _process_upload_completion(upload_id: str, session: dict, bot_manager,
 
             shutil.rmtree(session["dir"], ignore_errors=True)
 
+            file_doc = database.Files.find_one({
+                "chat_id": chat_id,
+                "file_unique_id": res["file_unique_id"],
+                "file_name": session["filename"],
+                "trashed": {"$ne": True}
+            })
+            doc_id_str = str(file_doc["_id"]) if file_doc else str(res["message_id"])
+
             session["status"] = "completed"
             session["result_file"] = {
-                "id": str(res["message_id"]),
+                "id": doc_id_str,
                 "file_unique_id": res["file_unique_id"],
                 "file_name": session["filename"],
                 "file_path": session["path"],
@@ -1051,9 +1057,17 @@ async def _process_upload_completion(upload_id: str, session: dict, bot_manager,
 
             shutil.rmtree(session["dir"], ignore_errors=True)
 
+            file_doc = database.Files.find_one({
+                "chat_id": chat_id,
+                "file_unique_id": final_unique_id,
+                "file_name": session["filename"],
+                "trashed": {"$ne": True}
+            })
+            doc_id_str = str(file_doc["_id"]) if file_doc else str(parts[0]["message_id"])
+
             session["status"] = "completed"
             session["result_file"] = {
-                "id": str(parts[0]["message_id"]),
+                "id": doc_id_str,
                 "file_unique_id": final_unique_id,
                 "file_name": session["filename"],
                 "file_path": session["path"],

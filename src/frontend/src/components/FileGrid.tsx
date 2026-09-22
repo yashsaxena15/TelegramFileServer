@@ -493,21 +493,29 @@ export const FileGrid = ({
           (it.fileType === "photo" ||
             PHOTO_EXTS.includes((it.extension || it.name.split('.').pop() || '').toLowerCase()))
       );
-      const allImages = photoItems.map((it) => ({
-        url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(it.name)}${tokenParam}${sep}inline=1`,
-        fileName: it.name,
-      }));
+      const allImages = photoItems.map((it) => {
+        const fId = it.id ? `&file_id=${encodeURIComponent(it.id)}` : '';
+        const fPath = it.file_path ? `&path=${encodeURIComponent(it.file_path)}` : '';
+        return {
+          url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(it.name)}${tokenParam}${sep}inline=1${fId}${fPath}`,
+          fileName: it.name,
+        };
+      });
       const currentIdx = allImages.findIndex((img) => img.fileName === item.name);
+      const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
+      const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
       setImageViewer({
         images: allImages.length > 0 ? allImages : [{
-          url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`,
+          url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`,
           fileName: item.name,
         }],
         initialIndex: Math.max(0, currentIdx),
       });
     } else if (isVideo || isAudio) {
       console.log("Opening media in built-in player");
-      const mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
+      const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
+      const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
+      const mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`;
       
       playMedia({ 
         url: mediaUrl, 
@@ -516,7 +524,9 @@ export const FileGrid = ({
         fileItem: item,
       });
     } else if (isDoc) {
-      const docUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1`;
+      const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
+      const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
+      const docUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`;
       setDocumentReader({
         url: docUrl,
         fileName: item.name,

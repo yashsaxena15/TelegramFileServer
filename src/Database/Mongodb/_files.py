@@ -141,8 +141,8 @@ class Files(Collection):
         # Log the parameters for debugging
         logger.info(f"add_folder called with folder_name='{folder_name}', folder_path='{folder_path}', owner_id='{owner_id}'")
             
-        # Check if folder already exists
-        query = {"file_name": folder_name, "file_path": path_query, "file_type": "folder"}
+        # Check if folder already exists (ignoring trashed folders)
+        query = {"file_name": folder_name, "file_path": path_query, "file_type": "folder", "trashed": {"$ne": True}}
         # Include owner_id in query if provided
         if owner_id:
             query["owner_id"] = owner_id
@@ -199,7 +199,7 @@ class Files(Collection):
         logger.info(f"create_folder_path called with full_path='{full_path}', owner_id='{owner_id}'")
         
         full_path = full_path.rstrip('/')
-        if not full_path or full_path in ['/', '/Home', 'Home', '/Vault', 'Vault', '/inbox', 'inbox']:
+        if not full_path or full_path in ['/', '/Home', 'Home', '/Vault', 'Vault', '/inbox', 'inbox', '/Telegram Inbox', 'Telegram Inbox']:
             logger.info("Root container path, returning True")
             return True
             
@@ -208,7 +208,7 @@ class Files(Collection):
             return True
 
         # Check if starting from known root container
-        if path_parts[0] in ["Home", "Vault", "inbox"]:
+        if path_parts[0] in ["Home", "Vault", "inbox", "Telegram Inbox"]:
             current_path = f"/{path_parts[0]}"
             sub_parts = path_parts[1:]
         else:
@@ -485,18 +485,16 @@ class Files(Collection):
         # If it's a folder, also trash all contents
         if doc.get("file_type") == "folder":
             folder_name = (doc.get("file_name") or "").strip()
-            # Safety check: Never allow trashing root Home or system folders
-            if folder_name.lower() in ["home", "root", "trash", "starred"] and orig_path in ["/", "/Home", "Home", ""]:
+            # Safety check: Never allow trashing root containers or system folders
+            if folder_name.lower() in ["home", "root", "trash", "starred", "vault", "inbox", "telegram inbox"] and orig_path in ["/", "/Home", "Home", ""]:
                 return False
             
             if orig_path in ["/", ""]:
-                f_full = f"/Home/{folder_name}"
-            elif orig_path.startswith("/Home"):
-                f_full = f"{orig_path.rstrip('/')}/{folder_name}"
+                f_full = f"/{folder_name}"
             else:
-                f_full = f"/Home/{orig_path.strip('/')}/{folder_name}"
+                f_full = f"{orig_path.rstrip('/')}/{folder_name}"
             
-            if f_full in ["/", "/Home", "Home", ""]:
+            if f_full in ["/", "/Home", "Home", "/Vault", "Vault", "/inbox", "inbox", "/Telegram Inbox", "Telegram Inbox", ""]:
                 return False
             
             import re

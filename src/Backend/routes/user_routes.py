@@ -348,7 +348,8 @@ async def change_user_password(request: Request, user_id_param: str, password_re
         logger.info(f"Attempting to change password for user_id_param: {user_id_param}")
         
         # Get current user data
-        current_user_data = database.Users.getUser(request.session.get("username"))
+        current_username = user.username if user else request.session.get("username")
+        current_user_data = database.Users.getUser(current_username)
         logger.info(f"Current user data: {current_user_data}")
         
         # Check if user is owner or trying to change their own password
@@ -377,7 +378,7 @@ async def change_user_password(request: Request, user_id_param: str, password_re
         
         # Allow if user is owner or if user is changing their own password
         target_username = target_user.get("username")
-        is_self = target_username == request.session.get("username")
+        is_self = target_username == current_username
         logger.info(f"Target username: {target_username}, Is self: {is_self}")
         
         if not is_owner and not is_self:

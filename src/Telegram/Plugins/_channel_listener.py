@@ -121,9 +121,20 @@ async def auto_channel_file_listener(client: Client, message: Message):
         if client.me and message.from_user and message.from_user.id == client.me.id:
             return
         
-        # Skip web app uploads
+        # Skip web app uploads and multi-part chunk intermediate uploads
         caption = (message.caption or "").strip()
-        if caption.startswith("Uploaded file:") or caption.startswith("Uploaded multi-part file:"):
+        if (
+            caption.startswith("Uploaded file:")
+            or caption.startswith("Uploaded multi-part file:")
+            or caption.startswith("Archive:")
+            or bool(re.search(r'\(Part \d+', caption, re.IGNORECASE))
+        ):
+            return
+
+        # Skip intermediate multi-part chunk files (e.g. filename.part1, filename.part2)
+        raw_media = message.document or message.video or message.audio or message.photo
+        raw_name = getattr(raw_media, 'file_name', '') or ''
+        if re.search(r'\.part\d+$', raw_name, re.IGNORECASE):
             return
 
         async with _listener_lock:

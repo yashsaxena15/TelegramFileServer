@@ -84,7 +84,10 @@ export const PropertiesDialog = ({
   const baseUrl = getApiBaseUrl();
   const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
   const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
-  const directUrl = `${baseUrl ? baseUrl : ""}/dl/${encodeURIComponent(item.name)}${tokenParam}`;
+  const sep = tokenParam ? "&" : "?";
+  const fileIdParam = item.id ? `${sep}file_id=${encodeURIComponent(item.id)}` : "";
+  const pathParam = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : "";
+  const directUrl = `${baseUrl ? baseUrl : ""}/dl/${encodeURIComponent(item.name)}${tokenParam}${fileIdParam}${pathParam}`;
 
   const copyToClipboard = async (text: string, fieldName: string) => {
     try {

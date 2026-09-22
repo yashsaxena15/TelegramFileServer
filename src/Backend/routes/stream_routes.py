@@ -102,31 +102,55 @@ async def stream_handler(request: Request, file_name: str):
     if not client:
         raise HTTPException(status_code=500, detail="No available bot clients")
     
-    # Look up the file in the database using the file name
+    # Look up the file in the database using file_id, path, or file name
     try:
-        # Search for the file in the Files collection by file name
-        # First try exact match
-        file_data = database.Files.find_one({"file_name": decoded_file_name, "owner_id": user_id})
-        
-        # If not found, try with path variations
+        file_id_param = request.query_params.get("file_id")
+        path_param = request.query_params.get("path")
+        extracted_filename = os.path.basename(decoded_file_name)
+        file_data = None
+
+        # 1. If file_id is provided, match by ObjectId, unique_id, or message_id
+        if file_id_param:
+            from bson import ObjectId
+            try:
+                if ObjectId.is_valid(file_id_param):
+                    file_data = database.Files.find_one({"_id": ObjectId(file_id_param), "trashed": {"$ne": True}})
+            except Exception:
+                pass
+            if not file_data:
+                file_data = database.Files.find_one({"file_unique_id": file_id_param, "trashed": {"$ne": True}})
+            if not file_data and file_id_param.isdigit():
+                file_data = database.Files.find_one({"message_id": int(file_id_param), "trashed": {"$ne": True}})
+
+        # 2. If path is provided, match file_name and file_path
+        if not file_data and path_param:
+            file_data = database.Files.find_one({
+                "file_name": extracted_filename,
+                "file_path": path_param,
+                "owner_id": user_id,
+                "trashed": {"$ne": True}
+            })
+            if not file_data:
+                file_data = database.Files.find_one({
+                    "file_name": extracted_filename,
+                    "file_path": path_param,
+                    "trashed": {"$ne": True}
+                })
+
+        # 3. Fallback to name search (excluding trashed first)
         if not file_data:
-            # Try with leading slash
-            file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/", "owner_id": user_id})
-        
-        # If still not found, try to extract the file name from a path
-        if not file_data:
-            # Handle paths like /Home/Images/filename.jpg by extracting just the filename
-            import os
-            extracted_filename = os.path.basename(decoded_file_name)
-            if extracted_filename != decoded_file_name:
-                file_data = database.Files.find_one({"file_name": extracted_filename, "owner_id": user_id})
-        
-        # If still not found, try without owner_id filter
-        if not file_data:
-            file_data = database.Files.find_one({"file_name": decoded_file_name})
-        if not file_data:
-            extracted_filename = os.path.basename(decoded_file_name)
-            file_data = database.Files.find_one({"file_name": extracted_filename})
+            file_data = database.Files.find_one({"file_name": extracted_filename, "owner_id": user_id, "trashed": {"$ne": True}})
+            if not file_data:
+                file_data = database.Files.find_one({"file_name": decoded_file_name, "owner_id": user_id, "trashed": {"$ne": True}})
+            if not file_data:
+                file_data = database.Files.find_one({"file_name": extracted_filename, "trashed": {"$ne": True}})
+            if not file_data:
+                file_data = database.Files.find_one({"file_name": decoded_file_name, "trashed": {"$ne": True}})
+            # Final fallback even if trashed (e.g. previewing trashed item)
+            if not file_data:
+                file_data = database.Files.find_one({"file_name": extracted_filename})
+            if not file_data:
+                file_data = database.Files.find_one({"file_name": decoded_file_name})
 
         if not file_data:
             print(f"File not found in database for name: {decoded_file_name}")
@@ -484,9 +508,6 @@ async def media_streamer(
 ) -> StreamingResponse:
     range_header = request.headers.get("Range", "")
     
-    # Add workload to the client
-    if hasattr(client, 'add_workload'):
-        client.add_workload(1)
     tg_connect = class_cache.get(client)
     if not tg_connect:
         tg_connect = ByteStreamer(client)
@@ -634,10 +655,6 @@ async def media_streamer(
         status_code = 206
     else:
         status_code = 200
-
-    # Remove workload when streaming is complete
-    if hasattr(client, 'add_workload'):
-        client.add_workload(-1)
 
     return StreamingResponse(
         status_code=status_code,

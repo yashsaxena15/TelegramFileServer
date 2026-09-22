@@ -363,31 +363,113 @@ async def compress_items_to_zip(
         total_zip_size = os.path.getsize(temp_zip)
         storage_chat_id = LOGS or MOVIE or files_to_compress[0]["doc"].get("chat_id")
 
-        sent_msg = await primary_client.send_document(
-            chat_id=storage_chat_id,
-            document=temp_zip,
-            caption=f"Archive: {zip_name}",
-            force_document=True
-        )
+        if total_zip_size > 1950 * 1024 * 1024:
+            # Multi-part split upload for large ZIP archives (> 1.95 GB)
+            from .pipeline_uploader import upload_part_task
+            chunk_size = 1950 * 1024 * 1024
+            upload_tasks = []
+            part_index = 1
+            start_byte = 0
 
-        if not sent_msg or not sent_msg.document:
-            raise RuntimeError("Failed to upload created ZIP archive to Telegram.")
+            with open(temp_zip, "rb") as f_in:
+                while start_byte < total_zip_size:
+                    part_file_path = f"{temp_zip}.part{part_index}"
+                    bytes_to_read = min(chunk_size, total_zip_size - start_byte)
+                    read_so_far = 0
+                    with open(part_file_path, "wb") as f_out:
+                        while read_so_far < bytes_to_read:
+                            chunk = f_in.read(min(8 * 1024 * 1024, bytes_to_read - read_so_far))
+                            if not chunk:
+                                break
+                            f_out.write(chunk)
+                            read_so_far += len(chunk)
+                    
+                    curr_part_size = read_so_far
+                    if curr_part_size > 0:
+                        task = asyncio.create_task(
+                            upload_part_task(
+                                part_file_path=part_file_path,
+                                part_index=part_index,
+                                file_name=zip_name,
+                                start_byte=start_byte,
+                                part_size=curr_part_size,
+                                chat_id=storage_chat_id,
+                                bot_manager=bot_manager,
+                                fallback_client=primary_client,
+                                caption=f"{zip_name} (Part {part_index})",
+                                is_single_part=False,
+                                file_type="document"
+                            )
+                        )
+                        upload_tasks.append(task)
+                        start_byte += curr_part_size
+                        part_index += 1
+                    else:
+                        if os.path.exists(part_file_path):
+                            try:
+                                os.remove(part_file_path)
+                            except Exception:
+                                pass
+                        break
 
-        doc_info = sent_msg.document
-        thumbnail = doc_info.thumbs[0].file_id if doc_info.thumbs else None
+            results = await asyncio.gather(*upload_tasks)
+            results.sort(key=lambda x: x["part_index"])
+            first_res = results[0]
+            first_unique_id = first_res["file_unique_id"] or f"archive_{uuid.uuid4().hex}"
+            first_thumbnail = next((r["thumbnail"] for r in results if r.get("thumbnail")), None)
 
-        database.Files.add_file(
-            chat_id=sent_msg.chat.id,
-            message_id=sent_msg.id,
-            thumbnail=thumbnail,
-            file_type="document",
-            file_unique_id=doc_info.file_unique_id,
-            file_size=total_zip_size,
-            file_name=zip_name,
-            file_caption=f"Archive: {zip_name}",
-            file_path=clean_dest,
-            owner_id=user_id
-        )
+            parts = [
+                {
+                    "part_index": r["part_index"],
+                    "chat_id": r["chat_id"],
+                    "message_id": r["message_id"],
+                    "file_unique_id": r["file_unique_id"],
+                    "part_size": r["part_size"],
+                    "start_byte": r["start_byte"],
+                    "end_byte": r["end_byte"]
+                }
+                for r in results
+            ]
+
+            database.Files.add_multipart_file(
+                chat_id=storage_chat_id,
+                thumbnail=first_thumbnail,
+                file_type="document",
+                file_unique_id=first_unique_id,
+                file_size=total_zip_size,
+                file_name=zip_name,
+                file_caption=f"Archive: {zip_name}",
+                parts=parts,
+                file_path=clean_dest,
+                owner_id=user_id,
+                part_size=chunk_size
+            )
+        else:
+            sent_msg = await primary_client.send_document(
+                chat_id=storage_chat_id,
+                document=temp_zip,
+                caption=f"Archive: {zip_name}",
+                force_document=True
+            )
+
+            if not sent_msg or not sent_msg.document:
+                raise RuntimeError("Failed to upload created ZIP archive to Telegram.")
+
+            doc_info = sent_msg.document
+            thumbnail = doc_info.thumbs[0].file_id if doc_info.thumbs else None
+
+            database.Files.add_file(
+                chat_id=sent_msg.chat.id,
+                message_id=sent_msg.id,
+                thumbnail=thumbnail,
+                file_type="document",
+                file_unique_id=doc_info.file_unique_id,
+                file_size=total_zip_size,
+                file_name=zip_name,
+                file_caption=f"Archive: {zip_name}",
+                file_path=clean_dest,
+                owner_id=user_id
+            )
 
         return {
             "success": True,
