@@ -9,6 +9,7 @@ import {
 import { Folder, File, Archive, Download, Loader2, Sparkles, AlertCircle } from "lucide-react";
 import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { toast } from "sonner";
+import { trackArchiveTask } from "@/lib/archiveTracker";
 
 interface ArchiveFileItem {
   name: string;
@@ -86,20 +87,22 @@ export const ArchiveInspectDialog = ({
             target_path: currentPath || "/Home",
           }),
         },
-        600000
+        15000
       );
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Extraction failed (${res.status})`);
+        throw new Error(errData.detail || `Extraction request failed (${res.status})`);
       }
 
       const data = await res.json();
-      toast.success(
-        `Extracted ${data.extracted_files} files directly in Telegram cloud!`
-      );
-      if (onExtractSuccess) onExtractSuccess();
       onClose();
+      if (data.task_id) {
+        trackArchiveTask(data.task_id, "extract", fileName, onExtractSuccess);
+      } else {
+        toast.success(`Extracted directly in Telegram cloud!`);
+        if (onExtractSuccess) onExtractSuccess();
+      }
     } catch (err: any) {
       toast.error(err.message || "Cloud extraction failed");
     } finally {

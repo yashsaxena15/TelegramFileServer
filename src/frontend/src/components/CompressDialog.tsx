@@ -9,6 +9,7 @@ import {
 import { Archive, Loader2, Sparkles } from "lucide-react";
 import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { toast } from "sonner";
+import { trackArchiveTask } from "@/lib/archiveTracker";
 
 interface CompressDialogProps {
   isOpen: boolean;
@@ -53,18 +54,22 @@ export const CompressDialog = ({
             zip_name: zipName.trim(),
           }),
         },
-        600000
+        15000
       );
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Compression failed (${res.status})`);
+        throw new Error(errData.detail || `Compression request failed (${res.status})`);
       }
 
       const data = await res.json();
-      toast.success(`Created archive '${data.file_name}' directly in Telegram cloud!`);
-      if (onCompressSuccess) onCompressSuccess();
       onClose();
+      if (data.task_id) {
+        trackArchiveTask(data.task_id, "compress", zipName.trim(), onCompressSuccess);
+      } else {
+        toast.success(`Created archive '${data.archive_name || zipName}' directly in Telegram cloud!`);
+        if (onCompressSuccess) onCompressSuccess();
+      }
     } catch (err: any) {
       toast.error(err.message || "Cloud compression failed");
     } finally {

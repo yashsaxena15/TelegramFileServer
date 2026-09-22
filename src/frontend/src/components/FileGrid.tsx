@@ -20,8 +20,8 @@ import { PropertiesDialog } from "./PropertiesDialog";
 import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { getPlayerPreference } from "@/lib/playerSettings";
 import { useBatchThumbnailLoader } from "@/hooks/useBatchThumbnailLoader"; // Add this import
-import { useIsMobile } from "@/hooks/use-mobile";
 import { toast } from "sonner";
+import { trackArchiveTask } from "@/lib/archiveTracker";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2181,24 +2181,28 @@ export const FileGrid = ({
             }}
             onExtractArchive={async () => {
               if (contextMenu.item) {
+                const targetItem = contextMenu.item;
                 try {
                   const baseUrl = getApiBaseUrl();
-                  toast.info(`Extracting ${contextMenu.item.name} in cloud...`);
                   const res = await fetchWithTimeout(`${baseUrl ? baseUrl : ""}/api/archive/extract`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                      file_id: getItemKey(contextMenu.item),
+                      file_id: getItemKey(targetItem),
                       target_path: currentApiPath || (currentPath ? `/${currentPath.join('/')}` : "/Home")
                     })
-                  }, 600000);
+                  }, 15000);
                   if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || `Extraction failed (${res.status})`);
+                    throw new Error(err.detail || `Extraction request failed (${res.status})`);
                   }
                   const data = await res.json();
-                  toast.success(`Extracted ${data.extracted_files} file(s) into Telegram cloud!`);
-                  if (onRefresh) onRefresh();
+                  if (data.task_id) {
+                    trackArchiveTask(data.task_id, "extract", targetItem.name, onRefresh);
+                  } else {
+                    toast.success(`Extracted directly into Telegram cloud!`);
+                    if (onRefresh) onRefresh();
+                  }
                 } catch (e: any) {
                   toast.error(e.message || "Cloud extraction failed");
                 }
