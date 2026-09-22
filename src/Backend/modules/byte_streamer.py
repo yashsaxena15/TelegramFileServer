@@ -13,6 +13,9 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from d4rk.Logs import setup_logger
 from .streaming_utils import get_file_ids
 
+from collections import OrderedDict
+import threading
+
 LOGGER = setup_logger(__name__)
 
 
@@ -22,6 +25,60 @@ class InvalidHash(Exception):
 
 class FIleNotFound(Exception):
     message = 'File not found!'
+
+
+class MediaChunkCache:
+    """
+    High-performance in-memory LRU cache for media chunks (e.g. 1MB MTProto blocks).
+    Caches recent chunks so seeking back 10s or replaying scenes has 0ms latency.
+    Also caches container cues/headers at the start and end of media files.
+    """
+    def __init__(self, max_size_bytes: int = 250 * 1024 * 1024):  # 250 MB in RAM
+        self.max_size_bytes = max_size_bytes
+        self.current_size_bytes = 0
+        self.cache: OrderedDict = OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, chat_id: int, message_id: int, chunk_offset: int, chunk_size: int):
+        key = (int(chat_id), int(message_id), int(chunk_offset), int(chunk_size))
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                return self.cache[key]
+            return None
+
+    def put(self, chat_id: int, message_id: int, chunk_offset: int, chunk_size: int, data: bytes):
+        if not data:
+            return
+        key = (int(chat_id), int(message_id), int(chunk_offset), int(chunk_size))
+        data_len = len(data)
+        with self.lock:
+            if key in self.cache:
+                old_data = self.cache.pop(key)
+                self.current_size_bytes -= len(old_data)
+
+            while self.current_size_bytes + data_len > self.max_size_bytes and self.cache:
+                _, evicted = self.cache.popitem(last=False)
+                self.current_size_bytes -= len(evicted)
+
+            self.cache[key] = data
+            self.current_size_bytes += data_len
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+            self.current_size_bytes = 0
+
+
+GLOBAL_CHUNK_CACHE = MediaChunkCache(max_size_bytes=250 * 1024 * 1024)
+
+_BYTE_STREAMER_INSTANCES: Dict[object, "ByteStreamer"] = {}
+
+
+def get_byte_streamer(client: Client) -> "ByteStreamer":
+    if client not in _BYTE_STREAMER_INSTANCES:
+        _BYTE_STREAMER_INSTANCES[client] = ByteStreamer(client)
+    return _BYTE_STREAMER_INSTANCES[client]
 
 
 class ByteStreamer:
@@ -68,24 +125,64 @@ class ByteStreamer:
             if part_until < part_from:
                 continue
 
-            # Gather workers for this part's message
-            workers = []
-            for c in active_clients:
-                if getattr(c, 'is_connected', False):
-                    try:
-                        fid = await self.get_file_properties(chat_id=chat_id, message_id=message_id, client=c)
-                        if fid:
-                            workers.append((c, fid))
-                    except Exception as ex:
-                        LOGGER.debug(f"Client {getattr(c, 'name', str(c))} could not get fid for part {part_idx_num}: {ex}")
+            offset = part_from - (part_from % chunk_size)
+            first_part_cut = part_from - offset
+            last_part_cut = (part_until % chunk_size) + 1
+            part_count = math.ceil((part_until + 1) / chunk_size) - math.floor(offset / chunk_size)
 
-            if not workers:
-                try:
-                    fid = await self.get_file_properties(chat_id=chat_id, message_id=message_id, client=self.client)
-                    if fid:
-                        workers = [(self.client, fid)]
-                except Exception as ex:
-                    LOGGER.error(f"Fallback client failed for part {part_idx_num}: {ex}")
+            # Instant RAM Cache Fast-Path: if all chunks are in memory, yield with 0ms latency
+            all_cached = True
+            cached_chunks = {}
+            for seq in range(1, part_count + 1):
+                p_offset = offset + (seq - 1) * chunk_size
+                c_data = GLOBAL_CHUNK_CACHE.get(chat_id, message_id, p_offset, chunk_size)
+                if c_data is not None:
+                    cached_chunks[seq] = c_data
+                else:
+                    all_cached = False
+                    break
+
+            if all_cached:
+                LOGGER.debug(f"Part {part_idx_num} (bytes {part_from}-{part_until}) served instantly from RAM cache")
+                for seq in range(1, part_count + 1):
+                    chunk = cached_chunks[seq]
+                    if part_count == 1:
+                        yield chunk[first_part_cut:last_part_cut]
+                    elif seq == 1:
+                        yield chunk[first_part_cut:]
+                    elif seq == part_count:
+                        yield chunk[:last_part_cut]
+                    else:
+                        yield chunk
+                continue
+
+            # Cache miss: Gather workers in parallel (limit to max 4 needed workers for speed)
+            max_needed = min(len(active_clients), max(2, min(part_count, 4)))
+            workers = []
+
+            # Check primary client first (usually warm in cache)
+            try:
+                fid = await self.get_file_properties(chat_id=chat_id, message_id=message_id, client=self.client)
+                if fid:
+                    workers.append((self.client, fid))
+            except Exception as ex:
+                LOGGER.debug(f"Primary client error: {ex}")
+
+            # Gather additional workers in parallel if needed
+            if len(workers) < max_needed:
+                candidates = [c for c in active_clients if c != self.client and getattr(c, 'is_connected', False)][:max_needed - len(workers)]
+                if candidates:
+                    async def _resolve_w(c):
+                        try:
+                            w_fid = await self.get_file_properties(chat_id=chat_id, message_id=message_id, client=c)
+                            return (c, w_fid) if w_fid else None
+                        except Exception:
+                            return None
+
+                    extra_workers = await asyncio.gather(*[_resolve_w(c) for c in candidates])
+                    for w in extra_workers:
+                        if w:
+                            workers.append(w)
 
             if not workers:
                 LOGGER.error(f"No active workers found for part {part_idx_num} (chat {chat_id}, msg {message_id})")
@@ -93,13 +190,18 @@ class ByteStreamer:
 
             LOGGER.info(f"Yielding part {part_idx_num} (bytes {part_from}-{part_until}) with {len(workers)} worker(s)")
 
-            # Prepare media sessions
-            worker_sessions = []
-            for w_c, w_fid in workers:
-                sess = await self.generate_media_session(w_c, w_fid)
-                loc = await self.get_location(w_fid)
-                if sess and loc:
-                    worker_sessions.append((w_c, sess, loc))
+            # Prepare media sessions in parallel
+            async def _prepare_session(w_c, w_fid):
+                try:
+                    sess = await self.generate_media_session(w_c, w_fid)
+                    loc = await self.get_location(w_fid)
+                    if sess and loc:
+                        return (w_c, sess, loc)
+                except Exception as ex:
+                    LOGGER.debug(f"Session creation failed for {getattr(w_c, 'name', str(w_c))}: {ex}")
+                return None
+
+            worker_sessions = [s for s in await asyncio.gather(*[_prepare_session(w_c, w_fid) for w_c, w_fid in workers]) if s]
 
             if not worker_sessions:
                 LOGGER.error(f"No valid media sessions for part {part_idx_num}")
@@ -109,15 +211,16 @@ class ByteStreamer:
                 if hasattr(w_c, 'add_workload'):
                     w_c.add_workload(1)
 
-            offset = part_from - (part_from % chunk_size)
-            first_part_cut = part_from - offset
-            last_part_cut = (part_until % chunk_size) + 1
-            part_count = math.ceil((part_until + 1) / chunk_size) - math.floor(offset / chunk_size)
-
             num_workers = len(worker_sessions)
-            PREFETCH_COUNT = max(4, min(num_workers * 2, 12))
+            PREFETCH_COUNT = max(2, min(num_workers, 4))
 
             async def fetch_part_chunk(chunk_seq: int, chunk_offset: int) -> bytes:
+                # 1. Check RAM Chunk Cache for 0ms instant seeking/rewind
+                cached = GLOBAL_CHUNK_CACHE.get(chat_id, message_id, chunk_offset, chunk_size)
+                if cached is not None:
+                    return cached
+
+                # 2. Fetch from Telegram MTProto
                 for attempt in range(min(3, num_workers)):
                     w_c, sess, loc = worker_sessions[(chunk_seq - 1 + attempt) % num_workers]
                     try:
@@ -128,15 +231,18 @@ class ByteStreamer:
                             timeout=15,
                         )
                         if isinstance(r, raw.types.upload.File):
-                            return r.bytes
+                            chunk_data = r.bytes
+                            if chunk_data:
+                                GLOBAL_CHUNK_CACHE.put(chat_id, message_id, chunk_offset, chunk_size, chunk_data)
+                            return chunk_data
                     except (TimeoutError, OSError, asyncio.TimeoutError) as e:
                         if attempt == min(3, num_workers) - 1:
                             LOGGER.warning(f"Timeout fetching chunk {chunk_seq} from {getattr(w_c, 'name', str(w_c))}: {e}")
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.1)
                     except Exception as e:
                         if attempt == min(3, num_workers) - 1:
                             LOGGER.warning(f"Error fetching chunk {chunk_seq} from {getattr(w_c, 'name', str(w_c))}: {e}")
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.1)
                 return b""
 
             tasks: Dict[int, asyncio.Task] = {}
@@ -144,6 +250,12 @@ class ByteStreamer:
             current_chunk = 1
 
             try:
+                # Schedule chunk 1 first for lowest initial TTFB
+                p_offset = offset
+                tasks[1] = asyncio.create_task(fetch_part_chunk(1, p_offset))
+                next_to_schedule = 2
+
+                # Pre-fill rest of the sliding window
                 while next_to_schedule <= min(part_count, PREFETCH_COUNT):
                     p_offset = offset + (next_to_schedule - 1) * chunk_size
                     tasks[next_to_schedule] = asyncio.create_task(fetch_part_chunk(next_to_schedule, p_offset))
@@ -212,9 +324,16 @@ class ByteStreamer:
             return
 
         num_workers = len(worker_sessions)
-        PREFETCH_COUNT = max(4, min(num_workers * 2, 12))
+        PREFETCH_COUNT = max(2, min(num_workers, 4))
 
         async def fetch_chunk(part_idx: int, part_offset: int) -> bytes:
+            # 1. Check RAM Chunk Cache for 0ms instant seeking/rewind
+            fid_id = getattr(file_id, 'media_id', 0)
+            cached = GLOBAL_CHUNK_CACHE.get(fid_id, 0, part_offset, chunk_size)
+            if cached is not None:
+                return cached
+
+            # 2. Fetch from Telegram MTProto
             for attempt in range(min(3, num_workers)):
                 w_c, sess, loc = worker_sessions[(part_idx - 1 + attempt) % num_workers]
                 try:
@@ -225,15 +344,18 @@ class ByteStreamer:
                         timeout=15,
                     )
                     if isinstance(r, raw.types.upload.File):
-                        return r.bytes
+                        chunk_data = r.bytes
+                        if chunk_data:
+                            GLOBAL_CHUNK_CACHE.put(fid_id, 0, part_offset, chunk_size, chunk_data)
+                        return chunk_data
                 except (TimeoutError, OSError, asyncio.TimeoutError) as e:
                     if attempt == min(3, num_workers) - 1:
                         LOGGER.warning(f"Timeout fetching part {part_idx} from {getattr(w_c, 'name', str(w_c))}: {e}")
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.1)
                 except Exception as e:
                     if attempt == min(3, num_workers) - 1:
                         LOGGER.error(f"Error fetching part {part_idx} from {getattr(w_c, 'name', str(w_c))}: {e}")
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.1)
             return b""
 
         tasks: Dict[int, asyncio.Task] = {}
@@ -241,7 +363,12 @@ class ByteStreamer:
         current_part = 1
 
         try:
-            # Pre-fill the sliding window
+            # Schedule chunk 1 first for lowest initial TTFB
+            p_offset = offset
+            tasks[1] = asyncio.create_task(fetch_chunk(1, p_offset))
+            next_to_schedule = 2
+
+            # Pre-fill rest of the sliding window
             while next_to_schedule <= min(part_count, PREFETCH_COUNT):
                 p_offset = offset + (next_to_schedule - 1) * chunk_size
                 tasks[next_to_schedule] = asyncio.create_task(fetch_chunk(next_to_schedule, p_offset))

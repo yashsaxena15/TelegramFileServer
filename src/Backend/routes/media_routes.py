@@ -378,14 +378,21 @@ async def media_transcode_stream(
     )
     is_default_audio = (audio_track is None or audio_track == 0)
 
-    # If seeking is at 0 and original quality and default audio track, no transcoding needed!
-    if is_original_quality and is_default_audio and (not start_time or start_time <= 0):
+    ext = decoded_file_name.rsplit(".", 1)[-1].lower() if "." in decoded_file_name else ""
+    is_browser_native_container = ext in ("mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a")
+
+    # Only redirect to raw stream if container is natively playable in browser, seeking is at 0, original quality, and default audio
+    if is_browser_native_container and is_original_quality and is_default_audio and (not start_time or start_time <= 0):
         # Redirect directly to raw stream handler to avoid any ffmpeg process
-        sep = "&" if "?" in stream_url else "?"
         return Response(status_code=307, headers={"Location": f"/dl/{urllib.parse.quote(decoded_file_name)}?inline=1&token={auth_token or ''}"})
 
-    # Prepare FFmpeg command
-    cmd = ["ffmpeg", "-v", "error"]
+    # Prepare FFmpeg command with fast seeking and zero-latency probing
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-fflags", "+nobuffer+fastseek",
+        "-analyzeduration", "2000000",
+        "-probesize", "2000000",
+    ]
 
     if start_time and start_time > 0:
         # Fast seeking before input
@@ -401,7 +408,7 @@ async def media_transcode_stream(
 
     if is_original_quality or not target_height:
         # Remux video without re-encoding (0% video CPU load!)
-        cmd.extend(["-c:v", "copy"])
+        cmd.extend(["-c:v", "copy", "-tag:v", "hvc1"])
     else:
         # Downscale video with single-thread ultrafast to protect VPS CPU
         scale_filter = f"scale=-2:{target_height}"
@@ -413,10 +420,11 @@ async def media_transcode_stream(
             "-threads", "1",
         ])
 
-    # Ensure audio is browser-compatible AAC
+    # Ensure audio is browser-compatible stereo AAC (transcodes AC3/EAC3/DTS at < 2% CPU)
     cmd.extend([
         "-c:a", "aac",
-        "-b:a", "128k",
+        "-b:a", "192k",
+        "-ac", "2",
         "-avoid_negative_ts", "make_zero",
         "-max_muxing_queue_size", "1024",
         "-f", "mp4",

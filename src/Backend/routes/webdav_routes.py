@@ -22,7 +22,7 @@ import re
 import asyncio
 import glob
 from ..security.credentials import verify_credentials
-from ..modules.byte_streamer import ByteStreamer
+from ..modules.byte_streamer import ByteStreamer, get_byte_streamer
 from ..modules.streaming_utils import parse_range_header, resolve_mime_type
 from ..modules.pipeline_uploader import upload_part_task
 from d4rk.Logs import setup_logger
@@ -1121,7 +1121,7 @@ async def handle_get_head(request: Request, segments: List[str], owner_id: str, 
             "part_index": p.get("part_index", 1),
         })
 
-    tg_connect = ByteStreamer(client)
+    tg_connect = get_byte_streamer(client)
     active_clients = [c for c in getattr(bot_manager, "client_list", []) if getattr(c, "is_connected", False)] or [client]
 
     body = tg_connect.yield_parts(
@@ -1136,10 +1136,12 @@ async def handle_get_head(request: Request, segments: List[str], owner_id: str, 
         "Content-Length": str(req_length),
         "Content-Type": content_type,
         "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600, immutable",
         "Last-Modified": format_dav_date(file_doc.get("modified_date")),
         "Content-Disposition": f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_filename}',
         "X-Content-Type-Options": "nosniff",
         "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
     }
     if range_header:
         headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"

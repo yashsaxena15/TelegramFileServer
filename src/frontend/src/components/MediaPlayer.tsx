@@ -122,6 +122,7 @@ export const MediaPlayer = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPiPActive, setIsPiPActive] = useState(false);
   const [canPiP, setCanPiP] = useState(false);
+  const [hasPlaybackError, setHasPlaybackError] = useState(false);
 
   // UI visibility states
   const [areControlsVisible, setAreControlsVisible] = useState(true);
@@ -136,8 +137,23 @@ export const MediaPlayer = ({
   const pendingSeekRef = useRef<number | null>(null);
   const nativeVideoDimensionsRef = useRef<{ width: number; height: number } | null>(null);
 
+  // Format detection: browsers natively support mp4, webm, etc. MKV, avi, ts require fMP4 remuxing
+  const isBrowserNative = useMemo(() => {
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    return ["mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a"].includes(ext);
+  }, [fileName]);
+
   // Dynamic stream, quality, audio & subtitle states
-  const [activeStreamUrl, setActiveStreamUrl] = useState(mediaUrl);
+  const [activeStreamUrl, setActiveStreamUrl] = useState(() => {
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    const native = ["mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a"].includes(ext);
+    if (native) return mediaUrl;
+
+    const baseUrl = getApiBaseUrl() || "";
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+    return `${baseUrl}/media/stream/${encodeURIComponent(fileName)}${tokenParam}`;
+  });
   const [currentQuality, setCurrentQuality] = useState<string>("original");
   const [currentAudioTrack, setCurrentAudioTrack] = useState<number>(0);
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; stream_index?: number; codec?: string; language: string; title: string }>>([
@@ -269,7 +285,10 @@ export const MediaPlayer = ({
   // Build deterministic stream URL based on quality, audio track, and start time
   const buildStreamUrl = useCallback(
     (q: string, aTrack: number, startTimeSec: number) => {
-      if (q === "original" && aTrack === 0) {
+      const ext = fileName.split(".").pop()?.toLowerCase() || "";
+      const native = ["mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a"].includes(ext);
+
+      if (q === "original" && aTrack === 0 && native) {
         return mediaUrl;
       }
       const baseUrl = getApiBaseUrl() || "";
@@ -296,8 +315,11 @@ export const MediaPlayer = ({
 
       setCurrentTime(clamped);
 
-      // If we are playing the original stream (with native HTTP Range request support)
-      if (currentQuality === "original" && currentAudioTrack === 0) {
+      const ext = fileName.split(".").pop()?.toLowerCase() || "";
+      const native = ["mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a"].includes(ext);
+
+      // If we are playing the original stream on a native format (HTTP Range hits 0ms RAM cache)
+      if (native && currentQuality === "original" && currentAudioTrack === 0) {
         streamStartTimeRef.current = 0;
         el.currentTime = clamped;
         return;
@@ -316,7 +338,7 @@ export const MediaPlayer = ({
         el.play().catch(() => {});
       }
     },
-    [currentQuality, currentAudioTrack, duration, isPlaying, buildStreamUrl]
+    [currentQuality, currentAudioTrack, duration, isPlaying, buildStreamUrl, fileName]
   );
 
   const seekRelative = useCallback(
@@ -761,27 +783,25 @@ export const MediaPlayer = ({
     setActiveMenu("none");
     setIsBuffering(true);
 
-    if (q === "original" && currentAudioTrack === 0) {
-      // Switching back to Auto (Original) with default audio
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    const native = ["mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a"].includes(ext);
+
+    if (q === "original" && currentAudioTrack === 0 && native) {
+      // Switching back to Auto (Original) with default audio on native format
       streamStartTimeRef.current = 0;
       pendingSeekRef.current = seekTime;
       setActiveStreamUrl(mediaUrl);
-      if (videoEl) {
-        videoEl.load();
-        if (wasPlaying) {
-          videoEl.play().catch(() => {});
-        }
-      }
     } else {
-      // Transcode / downscale stream
+      // Transcode / remux stream
       streamStartTimeRef.current = seekTime;
       const newUrl = buildStreamUrl(q, currentAudioTrack, seekTime);
       setActiveStreamUrl(newUrl);
-      if (videoEl) {
-        videoEl.load();
-        if (wasPlaying) {
-          videoEl.play().catch(() => {});
-        }
+    }
+
+    if (videoEl) {
+      videoEl.load();
+      if (wasPlaying) {
+        videoEl.play().catch(() => {});
       }
     }
 
@@ -799,28 +819,19 @@ export const MediaPlayer = ({
     setActiveMenu("none");
     setIsBuffering(true);
 
-    if (currentQuality === "original" && trackIndex === 0) {
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    const native = ["mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a"].includes(ext);
+
+    if (currentQuality === "original" && trackIndex === 0 && native) {
       // Switching back to default audio on original direct stream
       streamStartTimeRef.current = 0;
       pendingSeekRef.current = seekTime;
       setActiveStreamUrl(mediaUrl);
-      if (videoEl) {
-        videoEl.load();
-        if (wasPlaying) {
-          videoEl.play().catch(() => {});
-        }
-      }
     } else {
       // Custom audio track stream (remuxed or transcoded)
       streamStartTimeRef.current = seekTime;
       const newUrl = buildStreamUrl(currentQuality, trackIndex, seekTime);
       setActiveStreamUrl(newUrl);
-      if (videoEl) {
-        videoEl.load();
-        if (wasPlaying) {
-          videoEl.play().catch(() => {});
-        }
-      }
     }
 
     const trackLabel = audioTracks[trackIndex]?.title || `Track ${trackIndex + 1}`;
@@ -833,6 +844,23 @@ export const MediaPlayer = ({
       }
     }
   };
+
+  // Stall protection: if buffering stalls on original MKV/non-native stream for > 6s, switch to 1080p
+  useEffect(() => {
+    if (!isBuffering || currentQuality !== "original") return;
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    if (ext !== "mkv" && ext !== "avi" && ext !== "ts") return;
+
+    const timer = setTimeout(() => {
+      if (isBuffering && currentQuality === "original") {
+        console.log("Stall detected on original MKV stream, optimizing with 1080p transcode...");
+        toast.info("Buffering detected: optimizing video for your browser...");
+        handleQualityChange("1080p");
+      }
+    }, 6000);
+
+    return () => clearTimeout(timer);
+  }, [isBuffering, currentQuality, fileName]);
 
   // Custom subtitle upload handler (.srt / .vtt)
   const handleCustomSubtitleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1128,7 +1156,16 @@ export const MediaPlayer = ({
             }
           }
 
-          // Keep attempting playback or buffering without blocking modal
+          // Code 3: MEDIA_ERR_DECODE or Code 4: MEDIA_ERR_SRC_NOT_SUPPORTED
+          // Browser cannot decode this format (e.g. 4K HEVC unsupported profile)
+          if ((err?.code === 3 || err?.code === 4) && currentQuality === "original") {
+            console.log("Codec not supported by browser, falling back to 1080p transcode...");
+            toast.info("Optimizing video playback for your browser...");
+            handleQualityChange("1080p");
+            return;
+          }
+
+          setHasPlaybackError(true);
           setIsBuffering(false);
         }}
       >

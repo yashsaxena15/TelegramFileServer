@@ -38,7 +38,7 @@ from ..modules.streaming_utils import (
 )
 
 # Import ByteStreamer class from byte_streamer module
-from ..modules.byte_streamer import ByteStreamer, InvalidHash, FIleNotFound
+from ..modules.byte_streamer import ByteStreamer, InvalidHash, FIleNotFound, get_byte_streamer
 
 current_dir = Path(__file__).parent
 parent_dir = current_dir.parent
@@ -508,10 +508,7 @@ async def media_streamer(
 ) -> StreamingResponse:
     range_header = request.headers.get("Range", "")
     
-    tg_connect = class_cache.get(client)
-    if not tg_connect:
-        tg_connect = ByteStreamer(client)
-        class_cache[client] = tg_connect
+    tg_connect = get_byte_streamer(client)
 
     # Determine true total file size
     effective_file_size = total_file_size or file_size
