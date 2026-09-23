@@ -347,18 +347,26 @@ export const FileExplorer = () => {
   const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
   const isVaultMode = selectedFilter === "vault" || currentFolder === "Private Vault" || currentPath[0] === "Private Vault" || currentPath[0] === "Vault";
 
+  // Helper to ensure clean API path even if a virtual segment exists in currentPath
+  const getCleanPath = (segments: string[]) => {
+    // If segments contain "Starred" but we are not at root Starred view, strip "Starred"
+    const cleaned = segments.filter((seg, idx) => !(seg === "Starred" && idx === 1 && segments.length > 2));
+    if (cleaned.length === 1 && cleaned[0] === "Home") return "/Home";
+    return `/${cleaned.join('/')}`;
+  };
+
   // Convert currentPath to API path format
   const currentApiPath = isTrashMode
     ? "/trash"
-    : isStarredMode
+    : isStarredMode && currentFolder === "Starred"
     ? "/starred"
-    : isInboxMode
+    : isInboxMode && currentFolder === "Telegram Inbox"
     ? "/inbox"
     : isVaultMode
     ? (currentPath.length > 1 ? `/Vault/${currentPath.slice(1).join('/')}` : "/Vault")
     : currentPath.length === 1 && currentPath[0] === "Home"
     ? "/Home"
-    : `/${currentPath.join('/')}`;
+    : getCleanPath(currentPath);
   const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
   const { clipboard, cutItems, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
 
@@ -512,15 +520,65 @@ export const FileExplorer = () => {
     return result;
   }, [baseItems, searchQuery, typeFilter, sizeFilter, dateFilter, sortField, sortOrder, foldersFirst]);
 
-  const handleNavigate = (folderName: string) => {
-    // Navigate into user-created folders
-    const isUserFolder = files.some(f => f.type === "folder" && f.name === folderName);
+  const getFolderPathSegments = (folder: { name: string; file_path?: string }): string[] => {
+    const parent = (folder.file_path || "/Home").trim();
 
-    if (isUserFolder) {
-      setCurrentPath([...currentPath, folderName]);
-      if (!isVaultMode) {
-        setSelectedFilter("all"); // Reset filter when navigating normal folders
+    // Vault check
+    if (parent === "/Vault" || parent === "Vault") {
+      return ["Private Vault", folder.name];
+    }
+    if (parent.startsWith("/Vault/") || parent.startsWith("Vault/")) {
+      const sub = parent.replace(/^\/?Vault\/?/, "").split("/").filter(Boolean);
+      return ["Private Vault", ...sub, folder.name];
+    }
+
+    // Telegram Inbox check
+    if (parent === "/Telegram Inbox" || parent === "Telegram Inbox") {
+      return ["Home", "Telegram Inbox", folder.name];
+    }
+    if (parent.startsWith("/Telegram Inbox/") || parent.startsWith("Telegram Inbox/")) {
+      const sub = parent.replace(/^\/?Telegram Inbox\/?/, "").split("/").filter(Boolean);
+      return ["Home", "Telegram Inbox", ...sub, folder.name];
+    }
+
+    // Root Home check
+    if (parent === "/" || parent === "/Home" || parent === "Home" || parent === "") {
+      return ["Home", folder.name];
+    }
+
+    // Nested under Home (e.g. "/Home/My Drive/Multimedia")
+    const cleaned = parent.replace(/^\/?Home\/?/, "").split("/").filter(Boolean);
+    return ["Home", ...cleaned, folder.name];
+  };
+
+  const handleNavigate = (folderName: string, folderItem?: FileItem) => {
+    // Locate the folder item either passed directly or from the current files list
+    const item = folderItem || files.find(f => f.type === "folder" && f.name === folderName);
+
+    if (item && item.type === "folder") {
+      const newPath = getFolderPathSegments(item);
+      setCurrentPath(newPath);
+
+      // Clear search query & filters so child items aren't filtered out
+      setSearchQuery("");
+      setTypeFilter("all");
+      setSizeFilter("all");
+      setDateFilter("all");
+
+      if (newPath[0] === "Private Vault" || newPath[0] === "Vault") {
+        setSelectedFilter("vault");
+      } else if (newPath.length >= 2 && newPath[1] === "Telegram Inbox") {
+        setSelectedFilter("inbox");
+      } else {
+        setSelectedFilter("all");
       }
+      return;
+    }
+
+    // Fallback if item wasn't in current files list
+    setCurrentPath([...currentPath, folderName]);
+    if (!isVaultMode) {
+      setSelectedFilter("all");
     }
   };
 
@@ -1413,7 +1471,7 @@ export const FileExplorer = () => {
           }}
           onOpen={() => {
             if (contextMenu.item && contextMenu.item.type === "folder") {
-              handleNavigate(contextMenu.item.name);
+              handleNavigate(contextMenu.item.name, contextMenu.item);
             }
           }}
           onCopy={() => contextMenu.item && handleCopy(contextMenu.item)}

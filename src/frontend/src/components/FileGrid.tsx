@@ -38,7 +38,7 @@ import type { Event } from '@tauri-apps/api/event';
 interface FileGridProps {
   items: FileItem[];
   viewMode: "grid" | "list";
-  onNavigate: (folderName: string) => void;
+  onNavigate: (folderName: string, folderItem?: FileItem) => void;
   itemCount: number;
   onCopy: (item: FileItem | FileItem[]) => void;
   onCut: (item: FileItem | FileItem[]) => void;
@@ -486,7 +486,7 @@ export const FileGrid = ({
       setSelectedItems(new Set());
       setLastSelectedIndex(null);
       setIsSelectionMode(false);
-      onNavigate(item.name);
+      onNavigate(item.name, item);
     } else if (isPhoto) {
       const photoItems = items.filter(
         (it) =>

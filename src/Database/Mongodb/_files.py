@@ -296,8 +296,15 @@ class Files(Collection):
             files_query = build_query({"file_path": {"$in": ["/Home", "/"]}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
             all_items = list(self.find(files_query))
         else:
+            # Normalize path if client passed a virtual Starred prefix (e.g. /Home/Starred/My Drive -> /Home/My Drive)
+            clean_path = path
+            for prefix in ["/Home/Starred/", "/Starred/", "Starred/", "Home/Starred/"]:
+                if clean_path.startswith(prefix):
+                    clean_path = "/Home/" + clean_path[len(prefix):]
+                    break
+
             # Get files and folders in the specified folder
-            base_query = {"file_path": path, "trashed": {"$ne": True}, "is_vault": {"$ne": True}}
+            base_query = {"file_path": clean_path, "trashed": {"$ne": True}, "is_vault": {"$ne": True}}
             query = build_query(base_query)
             logger.info(f"Executing file query: {query}")
             all_items = list(self.find(query))
