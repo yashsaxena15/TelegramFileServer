@@ -1266,6 +1266,23 @@ export const api = {
         return response.json();
     },
 
+    async uploadTorrentFile(file: File, destination_path: string = '/Home'): Promise<{ success: boolean; message: string; count: number; tasks: any[] }> {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('destination_path', destination_path);
+
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/upload-torrent`, {
+            method: 'POST',
+            credentials: 'include',
+            body: formData,
+        }, 120000);
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to upload torrent file');
+        }
+        return response.json();
+    },
+
     async getRemoteTasks(): Promise<{ tasks: any[] }> {
         const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/tasks`, {
             method: 'GET',

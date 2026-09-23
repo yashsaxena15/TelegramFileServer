@@ -17,7 +17,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  Folder
+  Folder,
+  Magnet
 } from "lucide-react";
 import { useTransferManager } from "@/hooks/useTransferManager";
 import { formatBytes } from "@/lib/utils";
@@ -291,7 +292,11 @@ export const Transfers = () => {
                                      : "bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400"
                           }`}>
                             {isRemote ? (
-                              <CloudDownload className="w-5 h-5" />
+                              (item as any).source_type === "magnet" || (item as any).source_type === "torrent_file" ? (
+                                <Magnet className="w-5 h-5" />
+                              ) : (
+                                <CloudDownload className="w-5 h-5" />
+                              )
                             ) : isUpload ? (
                               <ArrowUpCircle className="w-5 h-5" />
                             ) : (
@@ -308,8 +313,20 @@ export const Transfers = () => {
                                          : isUpload ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
                                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
                               }`}>
-                                {isRemote ? "Cloud Leech" : isUpload ? "Upload" : "Download"}
+                                {isRemote
+                                  ? (item as any).source_type === "magnet"
+                                    ? "Magnet Leech"
+                                    : (item as any).source_type === "torrent_file"
+                                    ? "Torrent Leech"
+                                    : "Cloud Leech"
+                                  : isUpload ? "Upload" : "Download"}
                               </span>
+                              {/* Peer Count Badge */}
+                              {isRemote && (item as any).peer_count > 0 && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 flex items-center gap-1 border border-amber-500/20">
+                                  ⚡ {(item as any).peer_count} peers
+                                </span>
+                              )}
                               {/* Status Badge */}
                               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
                                 isCompleted ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" :

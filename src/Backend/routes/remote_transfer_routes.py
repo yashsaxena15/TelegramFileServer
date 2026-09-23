@@ -1,6 +1,6 @@
 # src/Backend/routes/remote_transfer_routes.py
 
-from fastapi import APIRouter, Request, Depends, HTTPException, status
+from fastapi import APIRouter, Request, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -23,7 +23,7 @@ async def add_remote_transfer(
     body: EnqueueRemoteTransferModel,
     user: User = Depends(require_auth)
 ):
-    """Enqueue a Google Drive (file/folder) or direct URL server-to-server download."""
+    """Enqueue a Google Drive (file/folder), BitTorrent Magnet, or direct URL server-to-server download."""
     if not user.telegram_user_id:
         raise HTTPException(
             status_code=400,
@@ -57,6 +57,53 @@ async def add_remote_transfer(
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue transfer: {str(e)}")
+
+@router.post("/upload-torrent")
+async def upload_torrent_transfer(
+    request: Request,
+    file: UploadFile = File(...),
+    destination_path: Optional[str] = Form("/Home"),
+    user: User = Depends(require_auth)
+):
+    """Enqueue a BitTorrent transfer from an uploaded .torrent file."""
+    if not user.telegram_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="TELEGRAM_NOT_VERIFIED: Please connect your Telegram account before initiating cloud transfers."
+        )
+
+    user_data = database.Users.find_one({"telegram_user_id": user.telegram_user_id})
+    if not user_data or "index_chat_id" not in user_data:
+        raise HTTPException(status_code=400, detail="User index chat not configured.")
+
+    chat_id = user_data["index_chat_id"]
+    user_id = str(user.telegram_user_id)
+
+    # Ensure background processor is running
+    remote_transfer_manager.start_worker(request.app)
+
+    try:
+        torrent_bytes = await file.read()
+        if not torrent_bytes:
+            raise ValueError("Uploaded .torrent file is empty.")
+
+        task = await remote_transfer_manager.enqueue_torrent_file(
+            user_id=user_id,
+            torrent_bytes=torrent_bytes,
+            original_filename=file.filename or "uploaded.torrent",
+            destination_path=destination_path or "/Home",
+            chat_id=chat_id
+        )
+        return {
+            "success": True,
+            "message": f"Enqueued torrent '{task.get('filename')}' for server transfer.",
+            "count": 1,
+            "tasks": [task]
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue torrent transfer: {str(e)}")
 
 @router.get("/tasks")
 async def get_remote_tasks(

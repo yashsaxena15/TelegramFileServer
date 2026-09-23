@@ -14,7 +14,8 @@ import {
   X,
   ChevronDown,
   ChevronUp,
-  ExternalLink
+  ExternalLink,
+  Magnet
 } from "lucide-react";
 
 export const TransfersWidget = () => {
@@ -190,7 +191,11 @@ export const TransfersWidget = () => {
                           : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                       }`}>
                         {isRemote ? (
-                          <CloudDownload className="w-3 h-3" />
+                          (item as any).source_type === "magnet" || (item as any).source_type === "torrent_file" ? (
+                            <Magnet className="w-3 h-3" />
+                          ) : (
+                            <CloudDownload className="w-3 h-3" />
+                          )
                         ) : isUpload ? (
                           <ArrowUp className="w-3 h-3" />
                         ) : (
@@ -204,7 +209,18 @@ export const TransfersWidget = () => {
                             <span className={`text-[9px] px-1 py-0.2 rounded font-normal ${
                               isPaused ? "bg-amber-500/20 text-amber-500" : "bg-purple-500/20 text-purple-400"
                             }`}>
-                              {isPaused ? "Paused" : "Cloud Leech"}
+                              {isPaused
+                                ? "Paused"
+                                : (item as any).source_type === "magnet"
+                                ? "Magnet"
+                                : (item as any).source_type === "torrent_file"
+                                ? "Torrent"
+                                : "Cloud Leech"}
+                            </span>
+                          )}
+                          {isRemote && (item as any).peer_count > 0 && (
+                            <span className="text-[9px] px-1 py-0.2 rounded font-semibold bg-amber-500/20 text-amber-500">
+                              ⚡ {(item as any).peer_count}
                             </span>
                           )}
                         </div>
