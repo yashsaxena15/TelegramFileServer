@@ -17,6 +17,9 @@ class EnqueueRemoteTransferModel(BaseModel):
 class CancelRemoteTransferModel(BaseModel):
     task_id: str
 
+class CancelRemoteGroupModel(BaseModel):
+    group_id: str
+
 @router.post("/add")
 async def add_remote_transfer(
     request: Request,
@@ -128,6 +131,16 @@ async def cancel_remote_task(
     if not success:
         raise HTTPException(status_code=404, detail="Task not found or already terminated.")
     return {"success": True, "message": "Transfer cancelled."}
+
+@router.post("/cancel-group")
+async def cancel_remote_group(
+    body: CancelRemoteGroupModel,
+    user: User = Depends(require_auth)
+):
+    """Cancel all active and queued tasks belonging to a group/folder."""
+    user_id = str(user.telegram_user_id or user.username)
+    cancelled_count = remote_transfer_manager.cancel_group(body.group_id, user_id)
+    return {"success": True, "cancelled_count": cancelled_count, "message": f"Cancelled {cancelled_count} transfer(s) in folder."}
 
 @router.post("/clear-completed")
 async def clear_completed_remote_tasks(

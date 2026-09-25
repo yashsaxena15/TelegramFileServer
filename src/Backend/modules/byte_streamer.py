@@ -34,7 +34,7 @@ class MediaChunkCache:
     Caches recent chunks so seeking back 10s or replaying scenes has 0ms latency.
     Also caches container cues/headers at the start and end of media files.
     """
-    def __init__(self, max_size_bytes: int = 250 * 1024 * 1024):  # 250 MB in RAM
+    def __init__(self, max_size_bytes: int = 64 * 1024 * 1024):  # 64 MB in RAM
         self.max_size_bytes = max_size_bytes
         self.current_size_bytes = 0
         self.cache: OrderedDict = OrderedDict()
@@ -71,7 +71,7 @@ class MediaChunkCache:
             self.current_size_bytes = 0
 
 
-GLOBAL_CHUNK_CACHE = MediaChunkCache(max_size_bytes=250 * 1024 * 1024)
+GLOBAL_CHUNK_CACHE = MediaChunkCache(max_size_bytes=64 * 1024 * 1024)
 
 _BYTE_STREAMER_INSTANCES: Dict[object, "ByteStreamer"] = {}
 

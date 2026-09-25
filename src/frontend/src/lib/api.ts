@@ -1309,6 +1309,20 @@ export const api = {
         return response.json();
     },
 
+    async cancelRemoteGroup(group_id: string): Promise<{ success: boolean; cancelled_count: number; message: string }> {
+        const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/cancel-group`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ group_id }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to cancel folder transfers');
+        }
+        return response.json();
+    },
+
     async clearCompletedRemoteTasks(): Promise<{ success: boolean; cleared_count: number }> {
         const response = await fetchWithTimeout(`${getApiBaseUrl()}/transfers/remote/clear-completed`, {
             method: 'POST',

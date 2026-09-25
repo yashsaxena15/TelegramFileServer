@@ -345,6 +345,17 @@ class RemoteTransferManager:
                 })
             )
 
+            # Assign unique group identifier and group name for folder batch
+            group_id = f"grp_{secrets.token_hex(6)}"
+            root_folder_name = "Google Drive Folder"
+            if folder_files:
+                first_rel = os.path.relpath(folder_files[0].local_path, resolve_output_dir).replace("\\", "/").strip("/")
+                parts = [p for p in first_rel.split("/") if p]
+                if len(parts) > 1 and parts[0]:
+                    root_folder_name = parts[0]
+                elif parts:
+                    root_folder_name = parts[0]
+
             docs_to_insert = []
             for gfile in folder_files:
                 if gfile.id in existing_gdrive_ids:
@@ -376,6 +387,10 @@ class RemoteTransferManager:
                     "phase": "Queued",
                     "error_message": None,
                     "is_vault": is_vault,
+                    "group_id": group_id,
+                    "group_name": root_folder_name,
+                    "group_type": "folder",
+                    "group_total_items": len(folder_files),
                     "created_at": now,
                     "updated_at": now
                 }
@@ -1042,6 +1057,9 @@ class RemoteTransferManager:
                         err_str = str(gerr)
                         logger.warning(f"gdown encountered: {err_str}. Attempting direct HTTP fallback for {gdrive_id}...")
                         import requests
+                        import urllib.parse
+                        import re
+
                         session = requests.Session()
                         session.headers.update({"User-Agent": MODERN_USER_AGENT})
                         direct_url = f"https://drive.google.com/uc?id={gdrive_id}&export=download" if gdrive_id else source_url
@@ -1049,15 +1067,80 @@ class RemoteTransferManager:
                         resp = session.get(direct_url, stream=True, allow_redirects=True, timeout=60)
                         if resp.status_code == 404:
                             raise FileNotFoundError("Google Drive file not found (HTTP 404). It may have been deleted, moved to trash, or the link is invalid.")
-                        
-                        # Check for virus scan confirmation page
-                        for k, v in resp.cookies.items():
-                            if k.startswith('download_warning'):
-                                confirm_url = f"https://drive.usercontent.google.com/download?id={gdrive_id}&export=download&confirm={v}"
+
+                        # Check if Google Drive returned an HTML page (virus scan warning, quota error, or interstitial)
+                        content_type = resp.headers.get("Content-Type", "").lower()
+                        if content_type.startswith("text/html"):
+                            # Safely read at most 128 KB of HTML (never load multi-MBs into memory)
+                            html_bytes = b""
+                            for chunk in resp.iter_content(chunk_size=16384):
+                                html_bytes += chunk
+                                if len(html_bytes) >= 131072:
+                                    break
+                            html_text = html_bytes.decode("utf-8", errors="replace")
+
+                            confirm_url = None
+                            # 1. Parse HTML for download confirmation form or URL
+                            try:
+                                import bs4
+                                soup = bs4.BeautifulSoup(html_text, "html.parser")
+                                form = soup.select_one("#download-form") or soup.select_one("#downloadForm") or soup.find("form", action=re.compile(r"download"))
+                                if form and form.get("action"):
+                                    action = form["action"]
+                                    if not action.startswith("http"):
+                                        action = urllib.parse.urljoin("https://drive.usercontent.google.com", action)
+                                    query_params = urllib.parse.parse_qs(urllib.parse.urlsplit(action).query)
+                                    for param in form.find_all("input", attrs={"type": "hidden"}):
+                                        if param.get("name") and param.get("value") is not None:
+                                            query_params[param["name"]] = [param["value"]]
+                                    url_parts = urllib.parse.urlsplit(action)
+                                    new_query = urllib.parse.urlencode(query_params, doseq=True)
+                                    confirm_url = urllib.parse.urlunsplit(url_parts._replace(query=new_query))
+                            except Exception as e_bs4:
+                                logger.debug(f"Form parsing error: {e_bs4}")
+
+                            if not confirm_url:
+                                # 2. Check for confirmation href link in HTML
+                                m_href = re.search(r'href="(\/uc\?export=download[^"]+)"', html_text) or re.search(r'href="(https:\/\/[^"]*drive\.usercontent\.google\.com\/download[^"]+)"', html_text)
+                                if m_href:
+                                    confirm_url = m_href.group(1).replace("&amp;", "&")
+                                    if not confirm_url.startswith("http"):
+                                        confirm_url = "https://docs.google.com" + confirm_url
+
+                            if not confirm_url:
+                                # 3. Check for cookies (download_warning_*)
+                                for k, v in resp.cookies.items():
+                                    if k.startswith("download_warning"):
+                                        confirm_url = f"https://drive.usercontent.google.com/download?id={gdrive_id}&export=download&confirm={v}"
+                                        break
+
+                            if confirm_url:
+                                logger.info(f"[REMOTE_TRANSFER] Following GDrive confirmation URL for {gdrive_id}...")
                                 resp = session.get(confirm_url, stream=True, allow_redirects=True, timeout=60)
-                                break
+                                content_type = resp.headers.get("Content-Type", "").lower()
+
+                            # SAFETY GUARD: If response is STILL text/html, Google Drive refused to download the file!
+                            if content_type.startswith("text/html"):
+                                err_reason = "Google Drive download quota exceeded or access restricted."
+                                m_sub = re.search(r'<p class="uc-error-subcaption">(.*?)</p>', html_text, re.DOTALL)
+                                if m_sub:
+                                    clean_sub = re.sub(r'<[^>]+>', '', m_sub.group(1)).strip()
+                                    if clean_sub:
+                                        err_reason = clean_sub
+                                elif "Too many users have viewed or downloaded this file recently" in html_text:
+                                    err_reason = "Too many users have downloaded this file recently (Google Drive 24h quota limit exceeded). Please try again later."
+                                elif "Access denied" in html_text or "Permission denied" in html_text:
+                                    err_reason = "Access denied: file is private or requires Google account sign-in."
+                                
+                                raise RuntimeError(f"Google Drive Error: {err_reason}")
 
                         resp.raise_for_status()
+
+                        cd = resp.headers.get("Content-Disposition", "")
+                        if "filename=" in cd:
+                            cd_match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd)
+                            if cd_match:
+                                filename_holder[0] = cd_match.group(1).strip()
                         tot = resp.headers.get("Content-Length")
                         if tot:
                             try:
@@ -1148,6 +1231,14 @@ class RemoteTransferManager:
 
             if not upload_tasks or writer.total_bytes == 0:
                 raise ValueError("No data received or transfer was cancelled.")
+
+            # Safety Guard: Ensure downloaded media/archive files are not corrupt HTML snippets (< 50 KB)
+            target_ext = filename_holder[0].rsplit(".", 1)[-1].lower() if "." in filename_holder[0] else ""
+            if target_ext in ("mkv", "mp4", "avi", "mov", "webm", "ts", "m4v", "flv", "zip", "rar", "7z", "tar", "gz", "iso") and writer.total_bytes < 50 * 1024:
+                raise ValueError(
+                    f"Corrupt or invalid download: Received only {writer.total_bytes} bytes for '{filename_holder[0]}'. "
+                    f"The remote source returned an error page or broken stream instead of the actual media file."
+                )
 
             # Ensure folder hierarchy exists in MongoDB
             database.Files.create_folder_path(destination_path, owner_id=str(user_id))
@@ -1273,6 +1364,20 @@ class RemoteTransferManager:
 
         return True
 
+    def cancel_group(self, group_id: str, user_id: str) -> int:
+        """Cancel all active or queued tasks belonging to a group/folder."""
+        coll = get_remote_db()["RemoteTransfers"]
+        tasks = list(coll.find({
+            "group_id": group_id,
+            "user_id": str(user_id),
+            "status": {"$in": ["queued", "downloading", "uploading_tg"]}
+        }))
+        cancelled_count = 0
+        for task in tasks:
+            if self.cancel_task(task["task_id"], user_id):
+                cancelled_count += 1
+        return cancelled_count
+
     def clear_completed(self, user_id: str) -> int:
         coll = get_remote_db()["RemoteTransfers"]
         cleared_tasks = list(coll.find({
@@ -1296,7 +1401,19 @@ class RemoteTransferManager:
 
     def get_user_tasks(self, user_id: str) -> List[Dict[str, Any]]:
         coll = get_remote_db()["RemoteTransfers"]
-        docs = list(coll.find({"user_id": str(user_id)}).sort("created_at", -1).limit(50))
+        # Fetch ALL active/running/queued tasks without limit so no active downloads are hidden
+        active_docs = list(coll.find({
+            "user_id": str(user_id),
+            "status": {"$in": ["queued", "downloading", "uploading_tg"]}
+        }).sort("created_at", -1))
+
+        # Fetch recent completed/cancelled/failed history tasks
+        history_docs = list(coll.find({
+            "user_id": str(user_id),
+            "status": {"$in": ["completed", "cancelled", "failed"]}
+        }).sort("updated_at", -1).limit(40))
+
+        docs = active_docs + history_docs
         for d in docs:
             d["_id"] = str(d["_id"])
             if isinstance(d.get("created_at"), datetime):

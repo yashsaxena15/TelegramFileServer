@@ -25,6 +25,10 @@ export interface RemoteTransferItem {
   phase?: string;
   error_message?: string;
   is_vault?: boolean;
+  group_id?: string;
+  group_name?: string;
+  group_type?: 'folder' | 'torrent';
+  group_total_items?: number;
   type: 'remote';
   created_at: string;
 }
@@ -141,6 +145,15 @@ export const useTransferManager = () => {
     }
   }, []);
 
+  const cancelRemoteGroup = useCallback(async (groupId: string) => {
+    try {
+      await api.cancelRemoteGroup(groupId);
+      setRemoteTransfers(prev => prev.map(t => t.group_id === groupId && (t.status === 'queued' || t.status === 'downloading' || t.status === 'uploading_tg') ? { ...t, status: 'cancelled', phase: 'Cancelled by user' } : t));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const clearCompletedRemote = useCallback(async () => {
     try {
       await api.clearCompletedRemoteTasks();
@@ -184,6 +197,7 @@ export const useTransferManager = () => {
     cancelDownload,
     retryDownload,
     cancelRemoteTransfer,
+    cancelRemoteGroup,
     clearCompletedRemote,
     refreshRemoteTransfers: fetchRemoteTransfers,
     pauseAll,

@@ -119,10 +119,11 @@ async def get_media_info(request: Request, file_name: str, token: Optional[str] 
     stream_url = _get_internal_stream_url(actual_file_name, auth_token)
 
     cmd = [
+        "nice", "-n", "19",
         "ffprobe",
         "-v", "error",
-        "-analyzeduration", "2000000",
-        "-probesize", "2000000",
+        "-analyzeduration", "1000000",
+        "-probesize", "1000000",
         "-show_entries", "stream=index,codec_type,codec_name,width,height:stream_tags=language,title",
         "-show_entries", "format=duration,size",
         "-of", "json",
@@ -296,6 +297,7 @@ async def get_subtitles(
     stream_url = _get_internal_stream_url(decoded_file_name, auth_token)
 
     cmd = [
+        "nice", "-n", "19",
         "ffmpeg",
         "-v", "error",
         "-i", stream_url,
@@ -381,14 +383,15 @@ async def media_transcode_stream(
     ext = decoded_file_name.rsplit(".", 1)[-1].lower() if "." in decoded_file_name else ""
     is_browser_native_container = ext in ("mp4", "m4v", "webm", "mp3", "ogg", "wav", "m4a")
 
-    # Only redirect to raw stream if container is natively playable in browser, seeking is at 0, original quality, and default audio
-    if is_browser_native_container and is_original_quality and is_default_audio and (not start_time or start_time <= 0):
-        # Redirect directly to raw stream handler to avoid any ffmpeg process
+    # Native containers (MP4, WebM, M4V, etc.) at original quality ALWAYS stream directly via HTTP Range (0% CPU, no FFmpeg)
+    if is_browser_native_container and is_original_quality and is_default_audio:
         return Response(status_code=307, headers={"Location": f"/dl/{urllib.parse.quote(decoded_file_name)}?inline=1&token={auth_token or ''}"})
 
-    # Prepare FFmpeg command with fast seeking and zero-latency probing
+    # Prepare FFmpeg command with lowest CPU scheduling priority (nice -n 19), single thread, fast seeking and zero-latency probing
     cmd = [
+        "nice", "-n", "19",
         "ffmpeg", "-v", "error",
+        "-threads", "1",
         "-fflags", "+nobuffer+fastseek",
         "-analyzeduration", "2000000",
         "-probesize", "2000000",

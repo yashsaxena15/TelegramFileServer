@@ -15,8 +15,10 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
-  Magnet
+  Magnet,
+  FolderArchive
 } from "lucide-react";
+import { groupRemoteTransfers } from "@/lib/transferGrouping";
 
 export const TransfersWidget = () => {
   const navigate = useNavigate();
@@ -36,6 +38,7 @@ export const TransfersWidget = () => {
     resumeDownload,
     cancelDownload,
     cancelRemoteTransfer,
+    cancelRemoteGroup,
     pauseAll,
     resumeAll
   } = useTransferManager();
@@ -50,15 +53,11 @@ export const TransfersWidget = () => {
     }
   }, [totalActiveCount]);
 
-  // Combine items for widget view (limit to top 6)
+  // Combine items for widget view (group remote items, limit to top 6)
+  const { groupedRemoteItems, singleRemoteItems } = groupRemoteTransfers(remoteTransfers);
   const allItems = [
-    ...remoteTransfers.map(r => ({
-      ...r,
-      type: "remote" as const,
-      filesize: r.filesize || 0,
-      bytesUploaded: r.transferred_bytes || 0,
-      downloaded: r.transferred_bytes || 0
-    })),
+    ...groupedRemoteItems,
+    ...singleRemoteItems,
     ...uploads.map(u => ({ ...u, type: "upload" as const })),
     ...downloads.map(d => ({
       ...d,
@@ -169,6 +168,7 @@ export const TransfersWidget = () => {
             <p className="text-center text-xs text-muted-foreground py-4">No active transfers</p>
           ) : (
             recentItems.map(item => {
+              const isGroup = Boolean((item as any).isGroup);
               const isRemote = item.type === "remote";
               const isUpload = item.type === "upload";
               const isTransferring = item.status === "uploading" || item.status === "downloading" || item.status === "uploading_tg";
@@ -190,7 +190,9 @@ export const TransfersWidget = () => {
                           ? "bg-blue-500/15 text-blue-600 dark:text-blue-400"
                           : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                       }`}>
-                        {isRemote ? (
+                        {isGroup ? (
+                          <FolderArchive className="w-3 h-3" />
+                        ) : isRemote ? (
                           (item as any).source_type === "magnet" || (item as any).source_type === "torrent_file" ? (
                             <Magnet className="w-3 h-3" />
                           ) : (
@@ -205,7 +207,12 @@ export const TransfersWidget = () => {
                       <div className="min-w-0 flex-1">
                         <div className="text-xs font-medium text-foreground truncate flex items-center gap-1.5">
                           {item.filename || item.name}
-                          {isRemote && (
+                          {isGroup && (
+                            <span className="text-[9px] px-1 py-0.2 rounded font-semibold bg-indigo-500/20 text-indigo-400">
+                              {(item as any).completedCount}/{(item as any).totalCount} files
+                            </span>
+                          )}
+                          {isRemote && !isGroup && (
                             <span className={`text-[9px] px-1 py-0.2 rounded font-normal ${
                               isPaused ? "bg-amber-500/20 text-amber-500" : "bg-purple-500/20 text-purple-400"
                             }`}>
@@ -254,7 +261,9 @@ export const TransfersWidget = () => {
                       <button
                         className="p-1 text-red-500 hover:text-red-600 rounded"
                         onClick={() => {
-                          if (isRemote) {
+                          if (isGroup) {
+                            cancelRemoteGroup((item as any).group_id);
+                          } else if (isRemote) {
                             cancelRemoteTransfer(item.id);
                           } else if (isUpload) {
                             cancelUpload(item.id);
@@ -262,7 +271,7 @@ export const TransfersWidget = () => {
                             cancelDownload(item.id);
                           }
                         }}
-                        title="Cancel"
+                        title={isGroup ? "Cancel entire folder" : "Cancel"}
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>

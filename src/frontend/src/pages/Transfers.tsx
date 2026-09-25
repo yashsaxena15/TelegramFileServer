@@ -18,11 +18,16 @@ import {
   AlertCircle,
   Clock,
   Folder,
-  Magnet
+  Magnet,
+  FolderArchive,
+  ChevronDown,
+  ChevronUp,
+  FileText
 } from "lucide-react";
 import { useTransferManager } from "@/hooks/useTransferManager";
 import { formatBytes } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
+import { groupRemoteTransfers } from "@/lib/transferGrouping";
 
 export const Transfers = () => {
   const navigate = useNavigate();
@@ -40,6 +45,7 @@ export const Transfers = () => {
     cancelDownload,
     retryDownload,
     cancelRemoteTransfer,
+    cancelRemoteGroup,
     pauseAll,
     resumeAll,
     cancelAll,
@@ -47,6 +53,11 @@ export const Transfers = () => {
   } = useTransferManager();
 
   const [activeTab, setActiveTab] = useState<"all" | "uploads" | "downloads" | "remote" | "completed">("all");
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
 
   const formatSpeed = (bytesPerSec?: number): string => {
     if (!bytesPerSec || bytesPerSec <= 0) return "";
@@ -69,17 +80,13 @@ export const Transfers = () => {
     }
   };
 
+  // Group remote transfers by group_id
+  const { groupedRemoteItems, singleRemoteItems } = groupRemoteTransfers(remoteTransfers);
+
   // Build unified item list
   const transferItems = [
-    ...remoteTransfers.map(r => ({
-      ...r,
-      type: "remote" as const,
-      filesize: r.filesize || 0,
-      bytesUploaded: r.transferred_bytes || 0,
-      downloaded: r.transferred_bytes || 0,
-      file: null,
-      startTime: r.created_at
-    })),
+    ...groupedRemoteItems,
+    ...singleRemoteItems,
     ...uploads.map(u => ({ ...u, type: "upload" as const })),
     ...downloads.map(d => ({
       ...d,
@@ -203,7 +210,7 @@ export const Transfers = () => {
                   className="rounded-lg text-xs sm:text-sm flex items-center gap-1.5 text-purple-600 dark:text-purple-400"
                 >
                   <CloudDownload className="w-3.5 h-3.5" />
-                  Cloud Leech ({remoteTransfers.length})
+                  Cloud Leech ({groupedRemoteItems.length + singleRemoteItems.length})
                 </Button>
                 <Button
                   variant={activeTab === "uploads" ? "default" : "ghost"}
@@ -264,6 +271,7 @@ export const Transfers = () => {
           ) : (
             <div className="flex flex-col gap-3">
               {filteredItems.map(item => {
+                const isGroup = Boolean((item as any).isGroup);
                 const isRemote = item.type === "remote";
                 const isUpload = item.type === "upload";
                 const isTransferring = item.status === "uploading" || item.status === "downloading" || item.status === "uploading_tg";
@@ -291,7 +299,9 @@ export const Transfers = () => {
                                      : isUpload ? "bg-blue-100 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400"
                                      : "bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400"
                           }`}>
-                            {isRemote ? (
+                            {isGroup ? (
+                              <FolderArchive className="w-5 h-5" />
+                            ) : isRemote ? (
                               (item as any).source_type === "magnet" || (item as any).source_type === "torrent_file" ? (
                                 <Magnet className="w-5 h-5" />
                               ) : (
@@ -313,7 +323,9 @@ export const Transfers = () => {
                                          : isUpload ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
                                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
                               }`}>
-                                {isRemote
+                                {isGroup
+                                  ? (item as any).group_type === "torrent" ? "Torrent Leech" : "Folder Leech"
+                                  : isRemote
                                   ? (item as any).source_type === "magnet"
                                     ? "Magnet Leech"
                                     : (item as any).source_type === "torrent_file"
@@ -321,6 +333,12 @@ export const Transfers = () => {
                                     : "Cloud Leech"
                                   : isUpload ? "Upload" : "Download"}
                               </span>
+                              {/* Group file counter badge */}
+                              {isGroup && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300 border border-indigo-500/20">
+                                  {(item as any).completedCount}/{(item as any).totalCount} files
+                                </span>
+                              )}
                               {/* Peer Count Badge */}
                               {isRemote && (item as any).peer_count > 0 && (
                                 <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 flex items-center gap-1 border border-amber-500/20">
@@ -379,6 +397,21 @@ export const Transfers = () => {
 
                         {/* Action buttons */}
                         <div className="flex items-center gap-1.5 shrink-0">
+                          {isGroup && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2.5 text-xs flex items-center gap-1.5 text-muted-foreground hover:text-foreground font-medium"
+                              onClick={() => toggleGroup((item as any).group_id)}
+                            >
+                              {expandedGroups[(item as any).group_id] ? (
+                                <>Hide Files <ChevronUp className="w-3.5 h-3.5" /></>
+                              ) : (
+                                <>Show Files ({(item as any).items.length}) <ChevronDown className="w-3.5 h-3.5" /></>
+                              )}
+                            </Button>
+                          )}
+
                           {!isRemote && isTransferring && (
                             <Button
                               variant="outline"
@@ -408,9 +441,11 @@ export const Transfers = () => {
                               variant="outline"
                               size="icon"
                               className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
-                              title="Cancel"
+                              title={isGroup ? "Cancel entire folder" : "Cancel"}
                               onClick={() => {
-                                if (isRemote) {
+                                if (isGroup) {
+                                  cancelRemoteGroup((item as any).group_id);
+                                } else if (isRemote) {
                                   cancelRemoteTransfer(item.id);
                                 } else if (isUpload) {
                                   cancelUpload(item.id);
@@ -459,6 +494,59 @@ export const Transfers = () => {
                           isFailed ? "[&>div]:bg-red-500" : ""
                         }`}
                       />
+
+                      {/* Collapsible files list inside group */}
+                      {isGroup && expandedGroups[(item as any).group_id] && (
+                        <div className="mt-3 pt-3 border-t border-border/60 flex flex-col gap-2 bg-muted/20 dark:bg-gray-900/30 -mx-4 -mb-4 p-4 rounded-b-xl">
+                          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center justify-between">
+                            <span>Files in this folder ({(item as any).items.length})</span>
+                            <span>{(item as any).completedCount} / {(item as any).totalCount} Completed</span>
+                          </div>
+                          {(item as any).items.map((sub: any) => (
+                            <div key={sub.id} className="flex flex-col gap-1 text-xs py-2 px-2.5 rounded-lg bg-card/60 border border-border/40">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium truncate max-w-xs sm:max-w-md text-foreground flex items-center gap-1.5" title={sub.filename}>
+                                  <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                  {sub.filename}
+                                </span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                    sub.status === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' :
+                                    sub.status === 'downloading' || sub.status === 'uploading_tg' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' :
+                                    sub.status === 'cancelled' ? 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' :
+                                    'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                                  }`}>
+                                    {sub.status.toUpperCase()}
+                                  </span>
+                                  {(sub.status === 'downloading' || sub.status === 'uploading_tg' || sub.status === 'queued') && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                      onClick={() => cancelRemoteTransfer(sub.id)}
+                                      title="Cancel this file"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                <span className="truncate max-w-[250px]">{sub.phase || (sub.filesize > 0 ? formatBytes(sub.filesize) : '')}</span>
+                                <span className="font-mono">{sub.progress}%</span>
+                              </div>
+                              <Progress
+                                value={sub.progress}
+                                className={`h-1 w-full ${
+                                  sub.status === 'completed' ? '[&>div]:bg-emerald-500' :
+                                  sub.status === 'cancelled' ? '[&>div]:bg-gray-400' :
+                                  '[&>div]:bg-purple-500'
+                                }`}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </Card>
                 );
