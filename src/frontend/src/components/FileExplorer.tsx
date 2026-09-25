@@ -22,6 +22,7 @@ import { copyStreamUrl } from "@/lib/utils";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { FileGrid } from "./FileGrid";
+import { FilePagination } from "./FilePagination";
 import { DeleteDialog } from "./DeleteDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
 import { RenameInput } from "./RenameInput";
@@ -367,18 +368,52 @@ export const FileExplorer = () => {
     : currentPath.length === 1 && currentPath[0] === "Home"
     ? "/Home"
     : getCleanPath(currentPath);
-  const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
-  const { clipboard, cutItems, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
-
   // Sort state
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [foldersFirst, setFoldersFirst] = useState<boolean>(true);
 
+  // Pagination state
+  const [page, setPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(50);
+
   // Filter state
   const [typeFilter, setTypeFilter] = useState<FileTypeFilter>("all");
   const [sizeFilter, setSizeFilter] = useState<SizeFilter>("all");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+
+  // Reset page to 1 when navigating folders or changing search/filters
+  useEffect(() => {
+    setPage(1);
+  }, [currentApiPath, searchQuery, typeFilter, sizeFilter, dateFilter]);
+
+  const isAllPages = pageSize === -1;
+  const { files, pagination, isLoading, isFetching, isError, error, refetch } = useFiles(
+    currentApiPath,
+    isAllPages ? undefined : page,
+    isAllPages ? undefined : pageSize,
+    sortField,
+    sortOrder
+  );
+
+  const effectivePagination = useMemo(() => {
+    if (pagination) return pagination;
+    if (files && files.length > 0) {
+      return {
+        page: 1,
+        page_size: files.length,
+        total_items: files.length,
+        total_pages: 1,
+        has_next: false,
+        has_prev: false,
+        start_index: 1,
+        end_index: files.length,
+      };
+    }
+    return undefined;
+  }, [pagination, files]);
+
+  const { clipboard, cutItems, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
 
   // Base items in current folder/section
   const baseItems = useMemo((): FileItem[] => {
@@ -1288,6 +1323,7 @@ export const FileExplorer = () => {
               onSortChange={(field, order) => {
                 setSortField(field);
                 setSortOrder(order);
+                setPage(1);
               }}
               onFoldersFirstChange={setFoldersFirst}
               typeFilter={typeFilter}
@@ -1301,9 +1337,10 @@ export const FileExplorer = () => {
                 setSizeFilter("all");
                 setDateFilter("all");
                 setSearchQuery("");
+                setPage(1);
               }}
               typeCounts={typeCounts}
-              totalCount={baseItems.length}
+              totalCount={effectivePagination?.total_items ?? baseItems.length}
               filteredCount={filteredItems.length}
               isInboxMode={isInboxMode}
               onOpenRemoteDownload={() => setRemoteDownloadOpen(true)}
@@ -1381,6 +1418,19 @@ export const FileExplorer = () => {
               isTrashMode={isTrashMode}
               onRestoreItem={handleRestoreItem}
               onToggleStar={handleToggleStar}
+            />
+
+            {/* Pagination Controls */}
+            <FilePagination
+              pagination={effectivePagination}
+              currentPage={page}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(newSize) => {
+                setPageSize(newSize);
+                setPage(1);
+              }}
+              isLoading={isFetching}
             />
 
           </div>

@@ -37,11 +37,15 @@ _auth_tokens = {}
 async def get_all_files_route(
     request: Request,
     path: str = Query(default="/", description="Folder path to fetch files from"),
+    page: Optional[int] = Query(default=None, ge=1, description="Page number (1-indexed)"),
+    page_size: Optional[int] = Query(default=None, ge=1, le=500, description="Items per page"),
+    sort_by: Optional[str] = Query(default=None, description="Field to sort by (name, date, size)"),
+    sort_order: Optional[str] = Query(default=None, description="Sort direction (asc, desc)"),
     user: User = Depends(require_auth)
 ):
     try:
         # Fetch files for the specified path and user
-        logger.info(f"Fetching files for path {path} and user {user}")
+        logger.info(f"Fetching files for path {path} and user {user} (page={page}, page_size={page_size})")
         # Use the user's Telegram ID as the user identifier
         user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
 
@@ -73,14 +77,49 @@ async def get_all_files_route(
             except Exception as sync_err:
                 logger.warning(f"[FILES_ROUTE] Inbox catchup error: {sync_err}")
 
-        files_data = database.Files.get_files_by_path(path, user_id)
+        is_paginated = (page is not None or page_size is not None)
+        if is_paginated:
+            p = max(1, page or 1)
+            ps = max(1, min(500, page_size or 50))
+            files_data, total_items = database.Files.get_files_by_path(
+                path=path,
+                owner_id=user_id,
+                page=p,
+                page_size=ps,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                folders_first=True
+            )
+        else:
+            files_data = database.Files.get_files_by_path(path=path, owner_id=user_id)
+            total_items = len(files_data)
+
         files_list = []
         for f in files_data:
             f_dict = asdict(f)
-            f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
+            f_dict['id'] = str(f_dict['id'])  # Convert ObjectId to string
             f_dict['file_unique_id'] = f.file_unique_id  # Include file_unique_id for streaming
-            
             files_list.append(f_dict)
+
+        if is_paginated:
+            import math
+            total_pages = math.ceil(total_items / ps) if total_items > 0 else 1
+            start_index = (p - 1) * ps + 1 if total_items > 0 else 0
+            end_index = min(p * ps, total_items)
+            return {
+                "files": files_list,
+                "pagination": {
+                    "page": p,
+                    "page_size": ps,
+                    "total_items": total_items,
+                    "total_pages": total_pages,
+                    "has_next": p < total_pages,
+                    "has_prev": p > 1,
+                    "start_index": start_index,
+                    "end_index": end_index
+                }
+            }
+
         return {"files": files_list}
     except Exception as e:
         logger.error(f"Error fetching files for path {path}: {e}")

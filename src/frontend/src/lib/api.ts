@@ -16,8 +16,20 @@ export interface ApiFile {
     file_path: string;  // Path where file is located
 }
 
+export interface PaginationMeta {
+    page: number;
+    page_size: number;
+    total_items: number;
+    total_pages: number;
+    has_next: boolean;
+    has_prev: boolean;
+    start_index: number;
+    end_index: number;
+}
+
 export interface FilesResponse {
     files: ApiFile[];
+    pagination?: PaginationMeta;
 }
 
 export interface UploadFileResponse {
@@ -288,17 +300,38 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
 };
 
 export const api = {
-    async fetchFiles(path: string = '/'): Promise<FilesResponse> {
+    async fetchFiles(
+        path: string = '/',
+        page?: number,
+        pageSize?: number,
+        sortBy?: string,
+        sortOrder?: string
+    ): Promise<FilesResponse> {
         const baseUrl = getApiBaseUrl();
         const apiUrl = baseUrl ? `${baseUrl}` : '';
         
+        const params = new URLSearchParams();
+        params.append('path', path);
+        if (page !== undefined && page !== null) {
+            params.append('page', page.toString());
+        }
+        if (pageSize !== undefined && pageSize !== null) {
+            params.append('page_size', pageSize.toString());
+        }
+        if (sortBy) {
+            params.append('sort_by', sortBy);
+        }
+        if (sortOrder) {
+            params.append('sort_order', sortOrder);
+        }
+
         // Prepare fetch options
         const fetchOptions: RequestInit = {
             method: 'GET',
             headers: authService.getAuthHeaders(),
         };
         
-        const response = await fetchWithTimeout(`${apiUrl}/files?path=${encodeURIComponent(path)}`, fetchOptions, 3000); // 3 second timeout
+        const response = await fetchWithTimeout(`${apiUrl}/files?${params.toString()}`, fetchOptions, 5000);
 
         if (!response.ok) {
             // Handle specific error cases

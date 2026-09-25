@@ -257,8 +257,17 @@ class Files(Collection):
             is_vault=bool(file.get("is_vault", False))
         ) for file in files]
     
-    def get_files_by_path(self, path: str = "/", owner_id: str = None):
-        """Get files and folders for a specific path"""
+    def get_files_by_path(
+        self,
+        path: str = "/",
+        owner_id: str = None,
+        page: int = None,
+        page_size: int = None,
+        sort_by: str = None,
+        sort_order: str = None,
+        folders_first: bool = True
+    ):
+        """Get files and folders for a specific path with optional pagination and sorting"""
         # Build query with owner filter
         def build_query(base_query):
             if owner_id:
@@ -268,33 +277,26 @@ class Files(Collection):
         # Vault path (Root)
         if path in ["vault", "/vault", "/Vault", "Vault"]:
             query = build_query({"file_path": {"$in": ["/Vault", "Vault"]}, "trashed": {"$ne": True}})
-            all_items = list(self.find(query))
         # Vault subfolders
         elif path.startswith("/Vault/") or path.startswith("Vault/"):
             query = build_query({"file_path": path, "trashed": {"$ne": True}})
-            all_items = list(self.find(query))
         # Trash path
         elif path in ["trash", "/trash", "/Home/Trash", "Trash", "/Trash"]:
             query = build_query({"trashed": True, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
-            all_items = list(self.find(query))
         # Starred path
         elif path in ["starred", "/starred", "/Home/Starred", "Starred", "/Starred"]:
             query = build_query({"starred": True, "trashed": {"$ne": True}, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
-            all_items = list(self.find(query))
         # Telegram Inbox path
         elif path in ["inbox", "/inbox", "Telegram Inbox", "/Telegram Inbox", "/Home/Telegram Inbox", "inbox/"]:
             query = build_query({"file_path": "/Telegram Inbox", "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
-            all_items = list(self.find(query))
         # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
         elif path == "all":
             # Get all files except folders
-            files_query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
-            all_items = list(self.find(files_query))
+            query = build_query({"file_type": {"$ne": "folder"}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}, "file_path": {"$not": {"$regex": "^/?Vault"}}})
         # For root path, get files with path="/" and folders with path="/"
         elif path in ["/", "Home", "/Home"]:
             # Get root-level files and folders (support both /Home and /)
-            files_query = build_query({"file_path": {"$in": ["/Home", "/"]}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
-            all_items = list(self.find(files_query))
+            query = build_query({"file_path": {"$in": ["/Home", "/"]}, "trashed": {"$ne": True}, "is_vault": {"$ne": True}})
         else:
             # Normalize path if client passed a virtual Starred prefix (e.g. /Home/Starred/My Drive -> /Home/My Drive)
             clean_path = path
@@ -307,31 +309,78 @@ class Files(Collection):
             base_query = {"file_path": clean_path, "trashed": {"$ne": True}, "is_vault": {"$ne": True}}
             query = build_query(base_query)
             logger.info(f"Executing file query: {query}")
+
+        def to_file_data(file_dict):
+            return FileData(
+                id=file_dict.get("_id"), 
+                chat_id=file_dict.get("chat_id"), 
+                message_id=file_dict.get("message_id"), 
+                file_type=file_dict.get("file_type"),
+                thumbnail=file_dict.get("thumbnail"), 
+                file_unique_id=file_dict.get("file_unique_id"), 
+                file_size=file_dict.get("file_size"), 
+                file_name=file_dict.get("file_name"), 
+                file_caption=file_dict.get("file_caption"),
+                file_path=file_dict.get("file_path", "/"),
+                owner_id=file_dict.get("owner_id"),
+                modified_date=file_dict.get("modified_date"),
+                is_split=file_dict.get("is_split", False),
+                total_parts=file_dict.get("total_parts", 1),
+                part_size=file_dict.get("part_size"),
+                parts=file_dict.get("parts"),
+                starred=bool(file_dict.get("starred", False)),
+                trashed=bool(file_dict.get("trashed", False)),
+                trashed_at=file_dict.get("trashed_at"),
+                original_path=file_dict.get("original_path"),
+                is_vault=bool(file_dict.get("is_vault", False))
+            )
+
+        if page is not None or page_size is not None:
+            p = max(1, int(page or 1))
+            ps = max(1, min(500, int(page_size or 50)))
+            skip = (p - 1) * ps
+
+            field_map = {
+                "name": "file_name",
+                "file_name": "file_name",
+                "date": "modified_date",
+                "modified_date": "modified_date",
+                "size": "file_size",
+                "file_size": "file_size"
+            }
+            target_field = field_map.get(sort_by, "modified_date")
+            target_dir = 1 if (sort_order in (1, "1", "asc", "ASC")) else -1
+
+            total_items = self.count_documents(query)
+
+            pipeline = [{"$match": query}]
+            if folders_first:
+                pipeline.append({
+                    "$addFields": {
+                        "is_folder": {"$cond": [{"$eq": ["$file_type", "folder"]}, 1, 0]}
+                    }
+                })
+                pipeline.append({
+                    "$sort": {
+                        "is_folder": -1,
+                        target_field: target_dir
+                    }
+                })
+            else:
+                pipeline.append({
+                    "$sort": {
+                        target_field: target_dir
+                    }
+                })
+
+            pipeline.append({"$skip": skip})
+            pipeline.append({"$limit": ps})
+
+            all_items = list(self.aggregate(pipeline))
+            return [to_file_data(f) for f in all_items], total_items
+        else:
             all_items = list(self.find(query))
-        
-        return [FileData(
-            id=file.get("_id"), 
-            chat_id=file.get("chat_id"), 
-            message_id=file.get("message_id"), 
-            file_type=file.get("file_type"),
-            thumbnail=file.get("thumbnail"), 
-            file_unique_id=file.get("file_unique_id"), 
-            file_size=file.get("file_size"), 
-            file_name=file.get("file_name"), 
-            file_caption=file.get("file_caption"),
-            file_path=file.get("file_path", "/"),
-            owner_id=file.get("owner_id"),
-            modified_date=file.get("modified_date"),
-            is_split=file.get("is_split", False),
-            total_parts=file.get("total_parts", 1),
-            part_size=file.get("part_size"),
-            parts=file.get("parts"),
-            starred=bool(file.get("starred", False)),
-            trashed=bool(file.get("trashed", False)),
-            trashed_at=file.get("trashed_at"),
-            original_path=file.get("original_path"),
-            is_vault=bool(file.get("is_vault", False))
-        ) for file in all_items]
+            return [to_file_data(f) for f in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):
         """Create a folder entry in the database"""
