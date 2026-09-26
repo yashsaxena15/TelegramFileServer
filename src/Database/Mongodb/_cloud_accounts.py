@@ -1,6 +1,6 @@
 # src/Database/Mongodb/_cloud_accounts.py
 
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Union
 from datetime import datetime, timezone
 from bson import ObjectId
 
@@ -21,16 +21,23 @@ class CloudAccounts(Collection):
             read_concern=collection.read_concern
         )
 
-    def get_user_accounts(self, user_id: str, provider: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_user_accounts(self, user_id: Union[str, List[str]], provider: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all connected cloud accounts for a given user, optionally filtered by provider."""
         try:
-            query = {"user_id": str(user_id)}
+            if isinstance(user_id, (list, tuple, set)):
+                query: Dict[str, Any] = {"user_id": {"$in": [str(u) for u in user_id]}}
+            else:
+                query = {"user_id": str(user_id)}
             if provider:
                 query["provider"] = provider
             cursor = self.find(query).sort("created_at", -1)
             accounts = []
             for doc in cursor:
-                doc["id"] = str(doc["_id"])
+                doc["id"] = str(doc.pop("_id"))
+                if isinstance(doc.get("created_at"), datetime):
+                    doc["created_at"] = doc["created_at"].isoformat()
+                if isinstance(doc.get("last_synced"), datetime):
+                    doc["last_synced"] = doc["last_synced"].isoformat()
                 # Mask sensitive refresh_token and client_secret for safety
                 if "credentials" in doc:
                     creds = doc["credentials"]
@@ -47,12 +54,15 @@ class CloudAccounts(Collection):
             logger.error(f"[CLOUD_ACCOUNTS] Error fetching accounts for user {user_id}: {e}")
             return []
 
-    def get_account_raw(self, account_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_account_raw(self, account_id: str, user_id: Optional[Union[str, List[str]]] = None) -> Optional[Dict[str, Any]]:
         """Fetch internal raw account document including credentials."""
         try:
             query: Dict[str, Any] = {"_id": ObjectId(account_id)}
             if user_id:
-                query["user_id"] = str(user_id)
+                if isinstance(user_id, (list, tuple, set)):
+                    query["user_id"] = {"$in": [str(u) for u in user_id]}
+                else:
+                    query["user_id"] = str(user_id)
             doc = self.find_one(query)
             if doc:
                 doc["id"] = str(doc["_id"])
@@ -120,10 +130,14 @@ class CloudAccounts(Collection):
             logger.error(f"[CLOUD_ACCOUNTS] Error updating tokens for {account_id}: {e}")
             return False
 
-    def delete_account(self, account_id: str, user_id: str) -> bool:
+    def delete_account(self, account_id: str, user_id: Union[str, List[str]]) -> bool:
         """Remove a cloud account connection."""
         try:
-            res = self.delete_one({"_id": ObjectId(account_id), "user_id": str(user_id)})
+            if isinstance(user_id, (list, tuple, set)):
+                query: Dict[str, Any] = {"_id": ObjectId(account_id), "user_id": {"$in": [str(u) for u in user_id]}}
+            else:
+                query = {"_id": ObjectId(account_id), "user_id": str(user_id)}
+            res = self.delete_one(query)
             return res.deleted_count > 0
         except Exception as e:
             logger.error(f"[CLOUD_ACCOUNTS] Error deleting account {account_id}: {e}")

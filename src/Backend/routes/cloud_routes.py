@@ -55,11 +55,16 @@ def _get_base_redirect_uri(request: Request, provided_uri: Optional[str] = None)
         base = f"{proto}://{host}"
     return f"{base}/api/cloud/gdrive/callback"
 
+def _get_user_identifiers(user: User) -> List[str]:
+    ids = [user.username]
+    if user.telegram_user_id:
+        ids.append(str(user.telegram_user_id))
+    return ids
+
 @router.get("/accounts")
 async def list_cloud_accounts(user: User = Depends(require_auth)):
     """List all connected cloud accounts for the current user."""
-    user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-    accounts = database.CloudAccounts.get_user_accounts(user_id=user_id)
+    accounts = database.CloudAccounts.get_user_accounts(user_id=_get_user_identifiers(user))
     return {"accounts": accounts}
 
 @router.post("/gdrive/auth-url")
@@ -221,8 +226,7 @@ async def gdrive_oauth_callback(
 @router.delete("/accounts/{account_id}")
 async def disconnect_cloud_account(account_id: str, user: User = Depends(require_auth)):
     """Disconnect and unlink a cloud storage account."""
-    user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-    deleted = database.CloudAccounts.delete_account(account_id=account_id, user_id=user_id)
+    deleted = database.CloudAccounts.delete_account(account_id=account_id, user_id=_get_user_identifiers(user))
     if not deleted:
         raise HTTPException(status_code=404, detail="Cloud account not found or access denied.")
     return {"success": True, "message": "Cloud account disconnected successfully."}
@@ -239,8 +243,7 @@ async def list_cloud_files(
     user: User = Depends(require_auth)
 ):
     """List files and folders in a Google Drive directory."""
-    user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=user_id)
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
     if not account:
         raise HTTPException(status_code=404, detail="Cloud account not found.")
 
@@ -275,8 +278,7 @@ async def delete_cloud_file(
     user: User = Depends(require_auth)
 ):
     """Trash or delete a file/folder in Google Drive."""
-    user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=user_id)
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
     if not account:
         raise HTTPException(status_code=404, detail="Cloud account not found.")
 
@@ -299,8 +301,7 @@ async def rename_cloud_file(
     user: User = Depends(require_auth)
 ):
     """Rename a file or folder in Google Drive."""
-    user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=user_id)
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
     if not account:
         raise HTTPException(status_code=404, detail="Cloud account not found.")
 
@@ -323,8 +324,7 @@ async def create_cloud_folder(
     user: User = Depends(require_auth)
 ):
     """Create a new folder in Google Drive."""
-    user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
-    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=user_id)
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
     if not account:
         raise HTTPException(status_code=404, detail="Cloud account not found.")
 
@@ -364,7 +364,7 @@ async def transfer_to_telegram(
     chat_id = user_data["index_chat_id"]
     user_id = str(user.telegram_user_id)
 
-    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=user_id)
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
     if not account:
         raise HTTPException(status_code=404, detail="Cloud account not found.")
 
