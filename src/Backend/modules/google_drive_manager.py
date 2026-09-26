@@ -28,8 +28,8 @@ _ACCESS_TOKEN_CACHE: Dict[str, Dict[str, Any]] = {}
 
 def get_effective_client_credentials(custom_client_id: Optional[str] = None, custom_client_secret: Optional[str] = None) -> Tuple[str, str]:
     """Return custom client credentials if provided, otherwise fallback to system .env config."""
-    cid = (custom_client_id or "").strip() or GOOGLE_CLIENT_ID
-    secret = (custom_client_secret or "").strip() or GOOGLE_CLIENT_SECRET
+    cid = (custom_client_id or "").strip('"\' \t\r\n') or (GOOGLE_CLIENT_ID or "").strip('"\' \t\r\n')
+    secret = (custom_client_secret or "").strip('"\' \t\r\n') or (GOOGLE_CLIENT_SECRET or "").strip('"\' \t\r\n')
     return cid, secret
 
 class GoogleDriveManager:

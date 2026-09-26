@@ -22,8 +22,8 @@ LEECH_CHAT = int(os.getenv("LEECH_CHAT")) if os.getenv("LEECH_CHAT") else None
 DATABASE_URL = str(os.getenv("DATABASE_URL", None))
 
 # Google OAuth Configuration
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip('"\' \t\r\n')
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip('"\' \t\r\n')
 
 # Web Server Configuration
 PORT = int(os.getenv("PORT", "8000"))

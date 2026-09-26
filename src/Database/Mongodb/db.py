@@ -26,6 +26,12 @@ class TypedDatabase:
         return r
 
     def __getattr__(self, item) -> Any:
+        if hasattr(_db, item):
+            return getattr(_db, item)
+        if hasattr(_db, item.capitalize()):
+            return getattr(_db, item.capitalize())
+        if hasattr(_db, item.lower()):
+            return getattr(_db, item.lower())
         return getattr(_db, item)
 
     async def get_database_stats_async(self):
