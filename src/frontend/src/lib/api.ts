@@ -32,6 +32,41 @@ export interface FilesResponse {
     pagination?: PaginationMeta;
 }
 
+export interface CloudAccount {
+    id: string;
+    user_id: string;
+    provider: string; // 'google_drive'
+    account_name: string;
+    account_email: string;
+    root_folder_id?: string;
+    created_at?: string;
+    last_synced?: string;
+    has_credentials?: boolean;
+}
+
+export interface CloudItem {
+    id: string;
+    name: string;
+    type: string; // 'folder', 'video', 'photo', 'audio', 'archive', 'document', 'file'
+    mimeType: string;
+    size: number;
+    modified?: string;
+    thumbnailLink?: string;
+    webViewLink?: string;
+    is_folder: boolean;
+    parents?: string[];
+}
+
+export interface CloudFilesResponse {
+    account_id: string;
+    provider: string;
+    account_name: string;
+    account_email: string;
+    folder_id: string;
+    items: CloudItem[];
+    nextPageToken?: string;
+}
+
 export interface UploadFileResponse {
     message: string;
     file: ApiFile;
@@ -1390,6 +1425,148 @@ export const api = {
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to clear media cache');
+        }
+        return response.json();
+    },
+
+    async fetchCloudAccounts(): Promise<{ accounts: CloudAccount[] }> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/accounts`, {
+            method: 'GET',
+            headers: authService.getAuthHeaders(),
+        });
+        if (!response.ok) throw new Error('Failed to fetch cloud accounts');
+        return response.json();
+    },
+
+    async getGoogleAuthUrl(customClientId?: string, customClientSecret?: string, redirectUri?: string): Promise<{ auth_url: string; redirect_uri: string }> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/gdrive/auth-url`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                custom_client_id: customClientId,
+                custom_client_secret: customClientSecret,
+                redirect_uri: redirectUri
+            }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to generate Google Drive auth URL');
+        }
+        return response.json();
+    },
+
+    async disconnectCloudAccount(accountId: string): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/accounts/${accountId}`, {
+            method: 'DELETE',
+            headers: authService.getAuthHeaders(),
+        });
+        if (!response.ok) throw new Error('Failed to disconnect cloud account');
+    },
+
+    async fetchCloudFiles(
+        accountId: string,
+        folderId: string = 'root',
+        pageSize: number = 50,
+        pageToken?: string,
+        query?: string,
+        sortBy?: string,
+        sortOrder?: string
+    ): Promise<CloudFilesResponse> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const params = new URLSearchParams();
+        params.append('folder_id', folderId);
+        params.append('page_size', pageSize.toString());
+        if (pageToken) params.append('page_token', pageToken);
+        if (query) params.append('query', query);
+        if (sortBy) params.append('sort_by', sortBy);
+        if (sortOrder) params.append('sort_order', sortOrder);
+
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/files?${params.toString()}`, {
+            method: 'GET',
+            headers: authService.getAuthHeaders(),
+        }, 15000);
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to fetch cloud files');
+        }
+        return response.json();
+    },
+
+    async deleteCloudFile(accountId: string, fileId: string, permanent: boolean = false): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/files/delete`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ file_id: fileId, permanent }),
+        });
+        if (!response.ok) throw new Error('Failed to delete file from Google Drive');
+    },
+
+    async renameCloudFile(accountId: string, fileId: string, newName: string): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/files/rename`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ file_id: fileId, new_name: newName }),
+        });
+        if (!response.ok) throw new Error('Failed to rename file in Google Drive');
+    },
+
+    async createCloudFolder(accountId: string, folderName: string, parentId: string = 'root'): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/files/mkdir`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ folder_name: folderName, parent_id: parentId }),
+        });
+        if (!response.ok) throw new Error('Failed to create folder in Google Drive');
+    },
+
+    async transferCloudToTelegram(
+        accountId: string,
+        sourceFileId: string,
+        destinationPath: string = '/Home',
+        operation: 'copy' | 'cut' = 'copy'
+    ): Promise<any> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/transfer-to-telegram`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                source_file_id: sourceFileId,
+                destination_path: destinationPath,
+                operation
+            }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to start cloud transfer');
         }
         return response.json();
     },

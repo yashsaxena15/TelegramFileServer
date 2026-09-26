@@ -40,6 +40,7 @@ from .routes.media_routes import router as media_router
 from .routes.archive_routes import router as archive_router
 from .routes.vault_routes import router as vault_router
 from .routes.remote_transfer_routes import router as remote_transfer_router
+from .routes.cloud_routes import router as cloud_router
 from .routes.frontend_routes import router as frontend_router
 from .routes.webdav_routes import router as webdav_router
 # Import exception handlers
@@ -164,6 +165,8 @@ app.include_router(vault_router)
 app.include_router(vault_router, prefix="/api")
 app.include_router(remote_transfer_router)
 app.include_router(remote_transfer_router, prefix="/api")
+app.include_router(cloud_router)
+app.include_router(cloud_router, prefix="/api")
 app.mount("/assets", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist", "assets")), name="assets")
 # Register exception handlers
 for exc_class, handler in exception_handlers.items():

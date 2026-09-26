@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useLocation, useParams, useNavigate } from "react-router-dom";
 import {
   FileItem,
@@ -47,7 +47,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import logger from "@/lib/logger";
-import { X as XIcon, Trash2, RotateCcw, AlertCircle, ShieldCheck, Lock, Unlock } from "lucide-react";
+import { X as XIcon, Trash2, RotateCcw, AlertCircle, ShieldCheck, Lock, Unlock, Cloud, FolderPlus } from "lucide-react";
 import { downloadManager } from "@/lib/downloadManager";
 import { motion, AnimatePresence } from "framer-motion";
 import { useError } from "@/contexts/ErrorHandlerContext"; // Import the error context
@@ -143,6 +143,7 @@ export const FileExplorer = () => {
 
   // Update browser history when currentPath changes
   useEffect(() => {
+    if (selectedFilter.startsWith("cloud:")) return;
     // Update the browser history with the new path
     const pathString = currentPath.length === 1 && currentPath[0] === "Home" 
       ? "/" 
@@ -154,7 +155,7 @@ export const FileExplorer = () => {
     } else {
       window.history.pushState({ path: currentPath }, '', pathString);
     }
-  }, [currentPath]);
+  }, [currentPath, selectedFilter]);
 
   // Handle browser back/forward buttons
   useEffect(() => {
@@ -348,6 +349,15 @@ export const FileExplorer = () => {
   const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
   const isVaultMode = selectedFilter === "vault" || currentFolder === "Private Vault" || currentPath[0] === "Private Vault" || currentPath[0] === "Vault";
 
+  // Cloud Storage Mode
+  const isCloudMode = selectedFilter.startsWith("cloud:");
+  const cloudParts = isCloudMode ? selectedFilter.split(":") : [];
+  const cloudAccountId = cloudParts[1] || "";
+  const cloudFolderId = cloudParts[2] || "root";
+  const [cloudBreadcrumbs, setCloudBreadcrumbs] = useState<Array<{ id: string; name: string }>>([
+    { id: "root", name: "Google Drive" }
+  ]);
+
   // Helper to ensure clean API path even if a virtual segment exists in currentPath
   const getCleanPath = (segments: string[]) => {
     // If segments contain "Starred" but we are not at root Starred view, strip "Starred"
@@ -365,6 +375,8 @@ export const FileExplorer = () => {
     ? "/inbox"
     : isVaultMode
     ? (currentPath.length > 1 ? `/Vault/${currentPath.slice(1).join('/')}` : "/Vault")
+    : isCloudMode
+    ? `/cloud/${cloudAccountId}`
     : currentPath.length === 1 && currentPath[0] === "Home"
     ? "/Home"
     : getCleanPath(currentPath);
@@ -388,15 +400,75 @@ export const FileExplorer = () => {
   }, [currentApiPath, searchQuery, typeFilter, sizeFilter, dateFilter]);
 
   const isAllPages = pageSize === -1;
-  const { files, pagination, isLoading, isFetching, isError, error, refetch } = useFiles(
-    currentApiPath,
+  const { files, pagination, isLoading: isFilesLoading, isFetching: isFilesFetching, isError, error, refetch: refetchFiles } = useFiles(
+    isCloudMode ? undefined : currentApiPath,
     isAllPages ? undefined : page,
     isAllPages ? undefined : pageSize,
     sortField,
     sortOrder
   );
 
+  // Cloud Accounts Query
+  const cloudAccountsQuery = useQuery({
+    queryKey: ['cloudAccounts'],
+    queryFn: api.fetchCloudAccounts,
+    staleTime: 60000,
+  });
+
+  // Cloud Files Query
+  const cloudQuery = useQuery({
+    queryKey: ['cloudFiles', cloudAccountId, cloudFolderId, page, pageSize, sortField, sortOrder, searchQuery],
+    queryFn: async () => {
+      return await api.fetchCloudFiles(
+        cloudAccountId,
+        cloudFolderId,
+        pageSize === -1 ? 200 : pageSize,
+        undefined,
+        searchQuery || undefined,
+        sortField,
+        sortOrder
+      );
+    },
+    enabled: isCloudMode && Boolean(cloudAccountId),
+  });
+
+  const isLoading = isCloudMode ? cloudQuery.isLoading : isFilesLoading;
+  const isFetching = isCloudMode ? cloudQuery.isFetching : isFilesFetching;
+  const refetch = isCloudMode ? () => cloudQuery.refetch() : refetchFiles;
+
+  const cloudItems = useMemo((): FileItem[] => {
+    if (!isCloudMode || !cloudQuery.data?.items) return [];
+    const accName = cloudQuery.data.account_name || "Google Drive";
+    return cloudQuery.data.items.map((ci) => ({
+      id: ci.id,
+      name: ci.name,
+      type: ci.type as any,
+      size: ci.size,
+      modified: ci.modified,
+      file_path: `/Cloud/${accName}`,
+      mime_type: ci.mimeType,
+      thumbnail_url: ci.thumbnailLink,
+      is_cloud: true,
+      cloud_account_id: cloudAccountId,
+      cloud_file_id: ci.id,
+      webViewLink: ci.webViewLink
+    } as any));
+  }, [isCloudMode, cloudQuery.data, cloudAccountId]);
+
   const effectivePagination = useMemo(() => {
+    if (isCloudMode) {
+      const total = cloudItems.length;
+      return {
+        page: 1,
+        page_size: total,
+        total_items: total,
+        total_pages: 1,
+        has_next: Boolean(cloudQuery.data?.nextPageToken),
+        has_prev: false,
+        start_index: total > 0 ? 1 : 0,
+        end_index: total,
+      };
+    }
     if (pagination) return pagination;
     if (files && files.length > 0) {
       return {
@@ -411,12 +483,13 @@ export const FileExplorer = () => {
       };
     }
     return undefined;
-  }, [pagination, files]);
+  }, [isCloudMode, cloudItems, cloudQuery.data, pagination, files]);
 
   const { clipboard, cutItems, copyItem, cutItem, clearClipboard, hasClipboard, isClipboardPasted, pasteItem, moveItem } = useFileOperations();
 
   // Base items in current folder/section
   const baseItems = useMemo((): FileItem[] => {
+    if (isCloudMode) return cloudItems;
     if (!Array.isArray(files)) return [];
     if (currentFolder === "Home" && selectedFilter === "all") {
       return files.filter(
@@ -424,7 +497,7 @@ export const FileExplorer = () => {
       );
     }
     return files;
-  }, [files, currentFolder, selectedFilter]);
+  }, [isCloudMode, cloudItems, files, currentFolder, selectedFilter]);
 
   // Compute category counts for quick filter chips
   const typeCounts = useMemo((): Record<FileTypeFilter, number> => {
@@ -587,6 +660,22 @@ export const FileExplorer = () => {
   };
 
   const handleNavigate = (folderName: string, folderItem?: FileItem) => {
+    if (isCloudMode) {
+      const item = folderItem || cloudItems.find(f => f.name === folderName);
+      if (item && item.type === "folder") {
+        const nextCrumbs = [...cloudBreadcrumbs, { id: item.id, name: item.name }];
+        setCloudBreadcrumbs(nextCrumbs);
+        setCurrentPath(nextCrumbs.map(b => b.name));
+        setSelectedFilter(`cloud:${cloudAccountId}:${item.id}`);
+        setPage(1);
+        setSearchQuery("");
+        setTypeFilter("all");
+        setSizeFilter("all");
+        setDateFilter("all");
+        return;
+      }
+    }
+
     // Locate the folder item either passed directly or from the current files list
     const item = folderItem || files.find(f => f.type === "folder" && f.name === folderName);
 
@@ -618,6 +707,17 @@ export const FileExplorer = () => {
   };
 
   const handleBreadcrumbClick = (index: number) => {
+    if (isCloudMode) {
+      const nextCrumbs = cloudBreadcrumbs.slice(0, index + 1);
+      const target = nextCrumbs[nextCrumbs.length - 1];
+      setCloudBreadcrumbs(nextCrumbs);
+      setCurrentPath(nextCrumbs.map(b => b.name));
+      setSelectedFilter(`cloud:${cloudAccountId}:${target ? target.id : "root"}`);
+      setPage(1);
+      setSearchQuery("");
+      return;
+    }
+
     if (index === 0) {
       if (isVaultMode) {
         setCurrentPath(["Private Vault"]);
@@ -662,6 +762,32 @@ export const FileExplorer = () => {
 
   const handlePaste = async () => {
     try {
+      if (isCloudMode) {
+        toast.info("To transfer items into Telegram, navigate to any folder under Home and click Paste.");
+        return;
+      }
+
+      if (clipboard?.items && clipboard.items.some((it: any) => it.is_cloud)) {
+        const targetPath = currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
+        const cloudItemsToTransfer = clipboard.items.filter((it: any) => it.is_cloud);
+        for (const item of cloudItemsToTransfer) {
+          const cloudAccId = (item as any).cloud_account_id;
+          const cloudFileId = (item as any).cloud_file_id || item.id;
+          if (cloudAccId && cloudFileId) {
+            await api.transferCloudToTelegram(
+              cloudAccId,
+              cloudFileId,
+              targetPath,
+              clipboard.operation === "cut" ? "cut" : "copy"
+            );
+          }
+        }
+        toast.success(`Queued ${cloudItemsToTransfer.length} cloud transfer(s) to ${targetPath}. Track progress in Transfers.`);
+        clearClipboard();
+        refetch();
+        return;
+      }
+
       // Construct the target path using current location
       const targetPath = currentApiPath || (currentPath.length > 1 ? `/${currentPath.join('/')}` : "/Home");
       
@@ -730,6 +856,25 @@ export const FileExplorer = () => {
   }, [isVaultUnlocked, isVaultMode]);
 
   const handleFilterChange = (filter: string) => {
+    if (filter.startsWith("cloud:")) {
+      const parts = filter.split(":");
+      const accId = parts[1] || "";
+      const fId = parts[2] || "root";
+      const acc = cloudAccountsQuery.data?.accounts?.find(a => a.id === accId);
+      const accName = acc?.account_name || "Google Drive";
+      setCloudBreadcrumbs([{ id: fId, name: accName }]);
+      setCurrentPath([accName]);
+      setSelectedFilter(filter);
+      setTypeFilter("all");
+      setSizeFilter("all");
+      setDateFilter("all");
+      setSortField("name");
+      setSortOrder("asc");
+      setFoldersFirst(true);
+      setPage(1);
+      return;
+    }
+
     if (filter === "vault") {
       if (!isVaultUnlocked) {
         setShowVaultModal(true);
@@ -839,6 +984,14 @@ export const FileExplorer = () => {
 
   const handleNewFolder = async (folderName: string) => {
     try {
+      if (isCloudMode) {
+        await api.createCloudFolder(cloudAccountId, folderName, cloudFolderId);
+        toast.success(`Folder "${folderName}" created in Google Drive`);
+        setNewFolderDialogOpen(false);
+        refetch();
+        return;
+      }
+
       // Use currentApiPath which correctly handles /Home and subfolders
       const backendPath = currentApiPath;
       
@@ -944,6 +1097,13 @@ export const FileExplorer = () => {
 
   const handleDownload = async (item: FileItem) => {
     try {
+      if ((item as any).is_cloud) {
+        if ((item as any).webViewLink) {
+          window.open((item as any).webViewLink, '_blank');
+          return;
+        }
+      }
+
       const baseUrl = getApiBaseUrl();
 
       if (item.type === "folder") {
@@ -1010,6 +1170,15 @@ export const FileExplorer = () => {
 
     try {
       const item = renamingItem.item;
+      if (isCloudMode) {
+        const fileId = (item as any).cloud_file_id || item.id;
+        await api.renameCloudFile(cloudAccountId, fileId, newName);
+        toast.success(`Renamed "${item.name}" to "${newName}"`);
+        setRenamingItem(null);
+        refetch();
+        return;
+      }
+
       const backendPath = currentApiPath;
       
       const baseUrl = getApiBaseUrl();
@@ -1048,6 +1217,15 @@ export const FileExplorer = () => {
     try {
       const item = deleteDialog.item;
       if (!item.id) return;
+
+      if (isCloudMode) {
+        const fileId = (item as any).cloud_file_id || item.id;
+        await api.deleteCloudFile(cloudAccountId, fileId);
+        toast.success(`Deleted "${item.name}" from Google Drive`);
+        setDeleteDialog(null);
+        refetch();
+        return;
+      }
 
       if (isTrashMode) {
         await api.deleteForever(item.id);
@@ -1107,6 +1285,10 @@ export const FileExplorer = () => {
 
   // Determine the selected filter based on the current path
   useEffect(() => {
+    if (selectedFilter.startsWith("cloud:")) {
+      return;
+    }
+
     // Map folder name to filter
     const folderMap: Record<string, string> = {
       "Home": "all",
@@ -1383,6 +1565,35 @@ export const FileExplorer = () => {
                 >
                   <Lock className="w-3.5 h-3.5 text-cyan-400" />
                   Lock Vault
+                </Button>
+              </div>
+            )}
+
+            {/* Cloud Storage Banner */}
+            {isCloudMode && (
+              <div className="flex items-center justify-between px-4 py-2 bg-sky-500/10 border-b border-sky-500/20 text-sm">
+                <div className="flex items-center gap-2 text-sky-800 dark:text-sky-300">
+                  <Cloud className="w-4 h-4 shrink-0 text-sky-500" />
+                  <span className="font-semibold text-xs sm:text-sm">
+                    {cloudQuery.data?.account_name || "Google Drive"}
+                  </span>
+                  {cloudQuery.data?.account_email && (
+                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:text-sky-300 font-mono">
+                      {cloudQuery.data.account_email}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-muted-foreground hidden md:inline">
+                    &bull; Copy/cut files here &amp; paste into Home to transfer to Telegram (0 disk usage)
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setNewFolderDialogOpen(true)}
+                  className="h-7 text-xs font-medium px-3 gap-1.5 shrink-0 border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 text-sky-700 dark:text-sky-300"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  New Folder
                 </Button>
               </div>
             )}

@@ -11,16 +11,18 @@ from src.Database.Mongodb._users import Users
 from src.Database.Mongodb._settings import Settings
 from src.Database.Mongodb._files import Files
 from src.Database.Mongodb._tgcodes import Tgcodes
+from src.Database.Mongodb._cloud_accounts import CloudAccounts
 
 class TypedDatabase:
     Users: Users
     Settings: Settings
     Files: Files
     Tgcodes: Tgcodes
+    CloudAccounts: CloudAccounts
     is_connected: bool
 
     def connect(self, name: str, DATABASE_URL: str = None) -> None:
-        r = _db.connect(name=name, collections=[Users,Settings,Files,Tgcodes], DATABASE_URL=DATABASE_URL)
+        r = _db.connect(name=name, collections=[Users,Settings,Files,Tgcodes,CloudAccounts], DATABASE_URL=DATABASE_URL)
         return r
 
     def __getattr__(self, item) -> Any:

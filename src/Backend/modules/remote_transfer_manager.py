@@ -264,7 +264,13 @@ class RemoteTransferManager:
         user_id: str,
         url: str,
         destination_path: str,
-        chat_id: int
+        chat_id: int,
+        custom_headers: Optional[Dict[str, str]] = None,
+        custom_filename: Optional[str] = None,
+        custom_filesize: Optional[int] = None,
+        post_action_delete: bool = False,
+        cloud_account_id: Optional[str] = None,
+        cloud_file_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Parses the URL (GDrive file, GDrive folder, direct URL) and creates
@@ -412,7 +418,7 @@ class RemoteTransferManager:
 
         task_id = f"rt_{secrets.token_hex(6)}"
         source_type = "gdrive_file" if gdrive_file_id else "direct_url"
-        filename = "Resolving..."
+        filename = custom_filename or "Resolving..."
 
         doc = {
             "task_id": task_id,
@@ -423,7 +429,7 @@ class RemoteTransferManager:
             "source_type": source_type,
             "destination_path": clean_dest,
             "filename": filename,
-            "filesize": 0,
+            "filesize": custom_filesize or 0,
             "transferred_bytes": 0,
             "speed_bps": 0,
             "progress": 0,
@@ -435,6 +441,15 @@ class RemoteTransferManager:
             "created_at": now,
             "updated_at": now
         }
+        if custom_headers:
+            doc["custom_headers"] = custom_headers
+        if post_action_delete:
+            doc["post_action_delete"] = True
+        if cloud_account_id:
+            doc["cloud_account_id"] = cloud_account_id
+        if cloud_file_id:
+            doc["cloud_file_id"] = cloud_file_id
+
         coll.insert_one(doc)
         doc["_id"] = str(doc["_id"])
         return [doc]
@@ -1180,6 +1195,8 @@ class RemoteTransferManager:
                             on_pause_state_changed(False)
 
                         req_headers = dict(headers)
+                        if task_doc.get("custom_headers"):
+                            req_headers.update(task_doc["custom_headers"])
                         if writer.total_bytes > 0:
                             req_headers["Range"] = f"bytes={writer.total_bytes}-"
 
@@ -1307,6 +1324,18 @@ class RemoteTransferManager:
                 "phase": "Completed & Saved to Telegram ☁️"
             })
             logger.info(f"[REMOTE_TRANSFER] Task {task_id}: Pipelined streaming transfer completed successfully!")
+
+            # If this was a cut operation from a cloud account, delete the source file
+            if task_doc.get("post_action_delete") and task_doc.get("cloud_account_id") and task_doc.get("cloud_file_id"):
+                try:
+                    from .google_drive_manager import GoogleDriveManager
+                    acc = database.CloudAccounts.get_account_raw(task_doc["cloud_account_id"])
+                    if acc:
+                        token = await GoogleDriveManager.get_valid_access_token(acc)
+                        await GoogleDriveManager.delete_file(token, task_doc["cloud_file_id"])
+                        logger.info(f"[REMOTE_TRANSFER] Deleted source cloud file {task_doc['cloud_file_id']} after cut transfer.")
+                except Exception as del_err:
+                    logger.warning(f"[REMOTE_TRANSFER] Failed to delete source cloud file after cut: {del_err}")
 
         except (asyncio.CancelledError, InterruptedError):
             for t in upload_tasks:
