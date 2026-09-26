@@ -344,12 +344,6 @@ export const FileExplorer = () => {
   // Current folder name (last part of currentPath)
   const currentFolder = currentPath[currentPath.length - 1] || "Home";
 
-  const isTrashMode = selectedFilter === "trash" || currentFolder === "Trash";
-  const isEffectiveTrashMode = isTrashMode || (isCloudMode && cloudFolderId === "trash");
-  const isStarredMode = selectedFilter === "starred" || currentFolder === "Starred";
-  const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
-  const isVaultMode = selectedFilter === "vault" || currentFolder === "Private Vault" || currentPath[0] === "Private Vault" || currentPath[0] === "Vault";
-
   // Cloud Storage Mode
   const isCloudMode = selectedFilter.startsWith("cloud:");
   const cloudParts = isCloudMode ? selectedFilter.split(":") : [];
@@ -359,13 +353,11 @@ export const FileExplorer = () => {
     { id: "root", name: "Google Drive" }
   ]);
 
-  useEffect(() => {
-    if (isCloudMode && cloudFolderId === "root") {
-      const accName = cloudQuery.data?.account_name || "Google Drive";
-      setCloudBreadcrumbs([{ id: "root", name: accName }]);
-      setCurrentPath([accName]);
-    }
-  }, [isCloudMode, cloudAccountId, cloudFolderId, cloudQuery.data?.account_name]);
+  const isTrashMode = selectedFilter === "trash" || currentFolder === "Trash";
+  const isEffectiveTrashMode = isTrashMode || (isCloudMode && cloudFolderId === "trash");
+  const isStarredMode = selectedFilter === "starred" || currentFolder === "Starred";
+  const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
+  const isVaultMode = selectedFilter === "vault" || currentFolder === "Private Vault" || currentPath[0] === "Private Vault" || currentPath[0] === "Vault";
 
   // Helper to ensure clean API path even if a virtual segment exists in currentPath
   const getCleanPath = (segments: string[]) => {
@@ -444,6 +436,14 @@ export const FileExplorer = () => {
   const isLoading = isCloudMode ? cloudQuery.isLoading : isFilesLoading;
   const isFetching = isCloudMode ? cloudQuery.isFetching : isFilesFetching;
   const refetch = isCloudMode ? () => cloudQuery.refetch() : refetchFiles;
+
+  useEffect(() => {
+    if (isCloudMode && cloudFolderId === "root") {
+      const accName = cloudQuery.data?.account_name || "Google Drive";
+      setCloudBreadcrumbs([{ id: "root", name: accName }]);
+      setCurrentPath([accName]);
+    }
+  }, [isCloudMode, cloudAccountId, cloudFolderId, cloudQuery.data?.account_name]);
 
   const cloudItems = useMemo((): FileItem[] => {
     if (!isCloudMode || !cloudQuery.data?.items) return [];
