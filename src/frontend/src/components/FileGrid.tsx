@@ -17,7 +17,7 @@ import { uploadManager } from "@/lib/uploadManager";
 import { TelegramVerificationDialog } from "./TelegramVerificationDialog";
 import { IndexChatDialog } from "./IndexChatDialog"; // Add this import
 import { PropertiesDialog } from "./PropertiesDialog";
-import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
+import { getApiBaseUrl, fetchWithTimeout, api } from "@/lib/api";
 import { getPlayerPreference } from "@/lib/playerSettings";
 import { useBatchThumbnailLoader } from "@/hooks/useBatchThumbnailLoader"; // Add this import
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -70,6 +70,9 @@ interface FileGridProps {
   isVaultMode?: boolean;
   onMoveToVault?: (item: FileItem) => void;
   onMoveToHome?: (item: FileItem) => void;
+  isCloudMode?: boolean;
+  cloudAccountId?: string;
+  cloudFolderId?: string;
 }
 
 interface ContextMenuState {
@@ -118,6 +121,9 @@ export const FileGrid = ({
   isVaultMode = false,
   onMoveToVault,
   onMoveToHome,
+  isCloudMode = false,
+  cloudAccountId,
+  cloudFolderId,
 }: FileGridProps) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
@@ -505,18 +511,37 @@ export const FileGrid = ({
       const currentIdx = allImages.findIndex((img) => img.fileName === item.name);
       const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
       const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
-      setImageViewer({
-        images: allImages.length > 0 ? allImages : [{
-          url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`,
-          fileName: item.name,
-        }],
-        initialIndex: Math.max(0, currentIdx),
-      });
+      if (item.is_cloud) {
+        const photoUrl = api.getCloudStreamUrl(
+          cloudAccountId || (item as any).cloud_account_id,
+          (item as any).cloud_file_id || item.id
+        );
+        setImageViewer({
+          images: [{ url: photoUrl, fileName: item.name }],
+          initialIndex: 0,
+        });
+      } else {
+        setImageViewer({
+          images: allImages.length > 0 ? allImages : [{
+            url: `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`,
+            fileName: item.name,
+          }],
+          initialIndex: Math.max(0, currentIdx),
+        });
+      }
     } else if (isVideo || isAudio) {
       console.log("Opening media in built-in player");
-      const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
-      const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
-      const mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`;
+      let mediaUrl: string;
+      if (item.is_cloud) {
+        mediaUrl = api.getCloudStreamUrl(
+          cloudAccountId || (item as any).cloud_account_id,
+          (item as any).cloud_file_id || item.id
+        );
+      } else {
+        const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
+        const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
+        mediaUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`;
+      }
       
       playMedia({ 
         url: mediaUrl, 
@@ -525,9 +550,17 @@ export const FileGrid = ({
         fileItem: item,
       });
     } else if (isDoc) {
-      const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
-      const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
-      const docUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`;
+      let docUrl: string;
+      if (item.is_cloud) {
+        docUrl = api.getCloudStreamUrl(
+          cloudAccountId || (item as any).cloud_account_id,
+          (item as any).cloud_file_id || item.id
+        );
+      } else {
+        const itemFId = item.id ? `&file_id=${encodeURIComponent(item.id)}` : '';
+        const itemFPath = item.file_path ? `&path=${encodeURIComponent(item.file_path)}` : '';
+        docUrl = `${baseUrl ? baseUrl : ''}/dl/${encodeURIComponent(item.name)}${tokenParam}${sep}inline=1${itemFId}${itemFPath}`;
+      }
       setDocumentReader({
         url: docUrl,
         fileName: item.name,
@@ -2128,7 +2161,19 @@ export const FileGrid = ({
             itemType={contextMenu.itemType}
             itemName={contextMenu.itemName}
             isVideo={isVideo}
-            onCopyStreamUrl={() => contextMenu.item && copyStreamUrl(contextMenu.item.name)}
+            onCopyStreamUrl={() => {
+              if (!contextMenu.item) return;
+              if (isCloudMode) {
+                const streamUrl = api.getCloudStreamUrl(
+                  cloudAccountId || (contextMenu.item as any).cloud_account_id,
+                  (contextMenu.item as any).cloud_file_id || contextMenu.item.id
+                );
+                navigator.clipboard.writeText(streamUrl);
+                toast.success("Cloud streaming URL copied to clipboard");
+              } else {
+                copyStreamUrl(contextMenu.item.name);
+              }
+            }}
             onOpen={() => contextMenu.item && handleItemOpen(contextMenu.item)}
             onCopy={() => {
               if (!contextMenu.item) return;
@@ -2212,10 +2257,12 @@ export const FileGrid = ({
             onCompress={() => {
               setCompressDialog(true);
             }}
-            isStarred={contextMenu.item?.starred}
+            isStarred={contextMenu.item?.starred || Boolean((contextMenu.item as any)?.is_starred)}
             onToggleStar={() => contextMenu.item && onToggleStar?.(contextMenu.item)}
-            isTrashMode={isTrashMode}
+            isTrashMode={isTrashMode || cloudFolderId === "trash" || Boolean((contextMenu.item as any)?.is_trashed)}
             onRestore={() => contextMenu.item && onRestoreItem?.(contextMenu.item)}
+            isCloudMode={isCloudMode}
+            isVirtualFolder={Boolean((contextMenu.item as any)?.is_virtual)}
           />
         );
       })()}

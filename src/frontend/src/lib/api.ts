@@ -53,8 +53,28 @@ export interface CloudItem {
     modified?: string;
     thumbnailLink?: string;
     webViewLink?: string;
+    webContentLink?: string;
     is_folder: boolean;
+    is_virtual?: boolean;
+    starred?: boolean;
+    trashed?: boolean;
     parents?: string[];
+}
+
+export interface CloudStorageQuotaResponse {
+    account_id: string;
+    provider: string;
+    account_email: string;
+    account_name: string;
+    limit: number;
+    usage: number;
+    usageInDrive: number;
+    usageInDriveTrash: number;
+    user: {
+        displayName: string;
+        emailAddress: string;
+        photoLink: string;
+    };
 }
 
 export interface CloudFilesResponse {
@@ -1569,5 +1589,68 @@ export const api = {
             throw new Error(err.detail || 'Failed to start cloud transfer');
         }
         return response.json();
+    },
+
+    async fetchCloudStorageQuota(accountId: string): Promise<CloudStorageQuotaResponse> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/storage`, {
+            method: 'GET',
+            headers: authService.getAuthHeaders(),
+        }, 15000);
+        if (!response.ok) throw new Error('Failed to fetch cloud storage quota');
+        return response.json();
+    },
+
+    async starCloudFile(accountId: string, fileId: string, starred: boolean): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/files/star`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ file_id: fileId, starred }),
+        });
+        if (!response.ok) throw new Error('Failed to update star in Google Drive');
+    },
+
+    async restoreCloudFile(accountId: string, fileId: string): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/files/restore`, {
+            method: 'POST',
+            headers: {
+                ...authService.getAuthHeaders(),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ file_id: fileId }),
+        });
+        if (!response.ok) throw new Error('Failed to restore file in Google Drive');
+    },
+
+    async emptyCloudTrash(accountId: string): Promise<void> {
+        const baseUrl = getApiBaseUrl();
+        const apiUrl = baseUrl ? `${baseUrl}` : '';
+        const response = await fetchWithTimeout(`${apiUrl}/cloud/${accountId}/trash/empty`, {
+            method: 'POST',
+            headers: authService.getAuthHeaders(),
+        });
+        if (!response.ok) throw new Error('Failed to empty Google Drive trash');
+    },
+
+    getCloudStreamUrl(accountId: string, fileId: string): string {
+        const baseUrl = getApiBaseUrl() || '';
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+        return `${baseUrl}/cloud/${encodeURIComponent(accountId)}/stream/${encodeURIComponent(fileId)}${tokenParam}`;
+    },
+
+    getCloudDownloadUrl(accountId: string, fileId: string): string {
+        const baseUrl = getApiBaseUrl() || '';
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+        return `${baseUrl}/cloud/${encodeURIComponent(accountId)}/download/${encodeURIComponent(fileId)}${tokenParam}`;
     },
 };

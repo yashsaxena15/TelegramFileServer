@@ -148,12 +148,83 @@ class GoogleDriveManager:
         sort_by: Optional[str] = "folder,name",
         sort_order: Optional[str] = "asc"
     ) -> Dict[str, Any]:
-        """List files and folders in a Google Drive directory."""
-        clean_folder = folder_id.strip() if folder_id else "root"
-        # Google Drive API query
-        query_parts = [f"'{clean_folder}' in parents", "trashed = false"]
-        if search_query and search_query.strip():
-            escaped_q = search_query.replace("'", "\\'")
+        """List files and folders in a Google Drive directory with virtual folder support."""
+        clean_folder = folder_id.strip() if isinstance(folder_id, str) and folder_id.strip() else "root"
+        clean_search = search_query.strip() if isinstance(search_query, str) and search_query.strip() else ""
+
+        # Virtual root level: if user is at root with no search, show 4 virtual folders
+        if clean_folder in ("root", "google_drive") and not clean_search:
+            virtual_items = [
+                {
+                    "id": "my_drive",
+                    "name": "My Drive",
+                    "type": "folder",
+                    "is_folder": True,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "size": 0,
+                    "modified": None,
+                    "is_virtual": True
+                },
+                {
+                    "id": "shared_with_me",
+                    "name": "Shared with me",
+                    "type": "folder",
+                    "is_folder": True,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "size": 0,
+                    "modified": None,
+                    "is_virtual": True
+                },
+                {
+                    "id": "starred",
+                    "name": "Starred",
+                    "type": "folder",
+                    "is_folder": True,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "size": 0,
+                    "modified": None,
+                    "is_virtual": True
+                },
+                {
+                    "id": "trash",
+                    "name": "Trash",
+                    "type": "folder",
+                    "is_folder": True,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "size": 0,
+                    "modified": None,
+                    "is_virtual": True
+                }
+            ]
+            return {
+                "items": virtual_items,
+                "nextPageToken": None,
+                "folder_id": "root"
+            }
+
+        # Build Google Drive API query based on section or parent
+        query_parts = []
+        if clean_folder in ("root", "google_drive"):
+            # Global search at root
+            query_parts.append("trashed = false")
+        elif clean_folder == "my_drive":
+            query_parts.append("'root' in parents")
+            query_parts.append("trashed = false")
+        elif clean_folder == "shared_with_me":
+            query_parts.append("sharedWithMe = true")
+            query_parts.append("trashed = false")
+        elif clean_folder == "starred":
+            query_parts.append("starred = true")
+            query_parts.append("trashed = false")
+        elif clean_folder == "trash":
+            query_parts.append("trashed = true")
+        else:
+            # Normal folder id
+            query_parts.append(f"'{clean_folder}' in parents")
+            query_parts.append("trashed = false")
+
+        if clean_search:
+            escaped_q = clean_search.replace("'", "\\'")
             query_parts.append(f"name contains '{escaped_q}'")
 
         q_str = " and ".join(query_parts)
@@ -170,7 +241,7 @@ class GoogleDriveManager:
         params: Dict[str, Any] = {
             "q": q_str,
             "pageSize": min(200, max(1, page_size)),
-            "fields": "nextPageToken, files(id, name, mimeType, size, modifiedTime, iconLink, thumbnailLink, webViewLink, parents)",
+            "fields": "nextPageToken, files(id, name, mimeType, size, modifiedTime, iconLink, thumbnailLink, webViewLink, webContentLink, parents, starred, trashed)",
             "orderBy": order_by,
             "supportsAllDrives": "true",
             "includeItemsFromAllDrives": "true"
@@ -210,7 +281,10 @@ class GoogleDriveManager:
                 "modified": f.get("modifiedTime"),
                 "thumbnailLink": f.get("thumbnailLink"),
                 "webViewLink": f.get("webViewLink"),
+                "webContentLink": f.get("webContentLink"),
                 "is_folder": is_folder,
+                "starred": bool(f.get("starred", False)),
+                "trashed": bool(f.get("trashed", False)),
                 "parents": f.get("parents", [])
             })
 
@@ -300,3 +374,65 @@ class GoogleDriveManager:
     def get_download_url(file_id: str) -> str:
         """Return the REST download URL for streaming."""
         return f"{DRIVE_API_BASE}/files/{file_id}?alt=media&supportsAllDrives=true"
+
+    @staticmethod
+    async def get_storage_quota(access_token: str) -> Dict[str, Any]:
+        """Fetch real-time storage quota and user details from Google Drive."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        url = f"{DRIVE_API_BASE}/about?fields=storageQuota,user"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=15) as resp:
+                if resp.status != 200:
+                    err_txt = await resp.text()
+                    raise RuntimeError(f"Failed to fetch Google Drive storage quota: {err_txt}")
+                data = await resp.json()
+        
+        quota = data.get("storageQuota", {})
+        user_info = data.get("user", {})
+        
+        limit_val = quota.get("limit")
+        limit_int = int(limit_val) if limit_val is not None else -1
+        usage_int = int(quota.get("usage", 0))
+        usage_drive = int(quota.get("usageInDrive", 0))
+        usage_trash = int(quota.get("usageInDriveTrash", 0))
+
+        return {
+            "limit": limit_int,
+            "usage": usage_int,
+            "usageInDrive": usage_drive,
+            "usageInDriveTrash": usage_trash,
+            "user": {
+                "displayName": user_info.get("displayName", ""),
+                "emailAddress": user_info.get("emailAddress", ""),
+                "photoLink": user_info.get("photoLink", "")
+            }
+        }
+
+    @staticmethod
+    async def toggle_star(access_token: str, file_id: str, starred: bool) -> bool:
+        """Add or remove star from a file or folder in Google Drive."""
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        url = f"{DRIVE_API_BASE}/files/{file_id}?supportsAllDrives=true"
+        payload = {"starred": starred}
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, headers=headers, json=payload, timeout=15) as resp:
+                return resp.status == 200
+
+    @staticmethod
+    async def restore_file(access_token: str, file_id: str) -> bool:
+        """Restore a trashed file or folder in Google Drive back to its original location."""
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        url = f"{DRIVE_API_BASE}/files/{file_id}?supportsAllDrives=true"
+        payload = {"trashed": False}
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, headers=headers, json=payload, timeout=15) as resp:
+                return resp.status == 200
+
+    @staticmethod
+    async def empty_trash(access_token: str) -> bool:
+        """Permanently empty the entire trash in Google Drive."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        url = f"{DRIVE_API_BASE}/files/trash"
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(url, headers=headers, timeout=30) as resp:
+                return resp.status in (200, 204)

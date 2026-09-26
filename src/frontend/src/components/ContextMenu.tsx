@@ -55,6 +55,8 @@ interface ContextMenuProps {
   isVaultMode?: boolean;
   onMoveToVault?: () => void;
   onMoveToHome?: () => void;
+  isCloudMode?: boolean;
+  isVirtualFolder?: boolean;
 }
 
 interface MenuItem {
@@ -101,6 +103,8 @@ export const ContextMenu = ({
   isVaultMode = false,
   onMoveToVault,
   onMoveToHome,
+  isCloudMode = false,
+  isVirtualFolder = false,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
@@ -272,8 +276,118 @@ export const ContextMenu = ({
               disabled: true,
             },
           ]
+        : isVirtualFolder
+        ? [
+            {
+              icon: Eye,
+              label: "Open",
+              action: "open",
+              shortcut: "Enter",
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Info,
+              label: "Properties",
+              action: "properties",
+              shortcut: "Alt+Enter",
+            },
+          ]
+        : isCloudMode
+        ? [
+            // Cloud file/folder context menu
+            {
+              icon: Eye,
+              label: "Open",
+              action: "open",
+              shortcut: "Enter",
+            },
+            ...(isVideo && onCopyStreamUrl
+              ? [
+                  {
+                    icon: Link,
+                    label: "Copy Stream URL",
+                    action: "copy_stream_url",
+                  },
+                ]
+              : []),
+            ...(!isTrashMode
+              ? [
+                  {
+                    icon: Star,
+                    label: isStarred ? "Remove from Starred" : "Add to Starred",
+                    action: "toggle_star",
+                  },
+                ]
+              : []),
+            ...(itemType !== "folder"
+              ? [
+                  {
+                    icon: Download,
+                    label: "Download",
+                    action: "download",
+                  },
+                ]
+              : []),
+            { divider: true, label: "", action: "" },
+            {
+              icon: Copy,
+              label: selectedCount > 1 ? `Copy (${selectedCount})` : "Copy",
+              action: "copy",
+              shortcut: "Ctrl+C",
+            },
+            {
+              icon: Scissors,
+              label: selectedCount > 1 ? `Cut (${selectedCount})` : "Cut",
+              action: "cut",
+              shortcut: "Ctrl+X",
+            },
+            {
+              icon: Clipboard,
+              label: "Paste",
+              action: "paste",
+              shortcut: "Ctrl+V",
+            },
+            { divider: true, label: "", action: "" },
+            ...(!isTrashMode
+              ? [
+                  {
+                    icon: Pencil,
+                    label: "Rename",
+                    action: "rename",
+                    shortcut: "F2",
+                  },
+                ]
+              : []),
+            ...(isTrashMode
+              ? [
+                  {
+                    icon: RotateCcw,
+                    label: selectedCount > 1 ? `Restore (${selectedCount})` : "Restore",
+                    action: "restore",
+                  },
+                ]
+              : []),
+            { divider: true, label: "", action: "" },
+            {
+              icon: Trash2,
+              label: isTrashMode
+                ? (selectedCount > 1 ? `Delete Forever (${selectedCount})` : "Delete Forever from Drive")
+                : (selectedCount > 1 ? `Move to Drive Trash (${selectedCount})` : "Move to Drive Trash"),
+              action: "delete",
+              shortcut: "Del",
+              danger: true,
+              disabled: disableDelete,
+            },
+            { divider: true, label: "", action: "" },
+            {
+              icon: Info,
+              label: "Properties",
+              action: "properties",
+              shortcut: "Alt+Enter",
+            },
+          ]
         : [
-            // File/Folder context menu
+            // Local File/Folder context menu
             {
               icon: Eye,
               label: "Open",

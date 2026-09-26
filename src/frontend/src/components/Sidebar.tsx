@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { 
   FolderOpen, Star, Trash2, 
   HardDrive, User, Settings, Users, LogOut, Inbox, Laptop,
@@ -31,6 +32,96 @@ interface SidebarProps {
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }
+
+function formatStorageBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+const CloudAccountRow = ({
+  acc,
+  isSelected,
+  collapsed,
+  onSelect,
+  onDisconnect
+}: {
+  acc: CloudAccount;
+  isSelected: boolean;
+  collapsed: boolean;
+  onSelect: () => void;
+  onDisconnect: () => void;
+}) => {
+  const { data: quota } = useQuery({
+    queryKey: ['cloudStorageQuota', acc.id],
+    queryFn: () => api.fetchCloudStorageQuota(acc.id),
+    staleTime: 60000,
+    enabled: !collapsed,
+  });
+
+  const usedBytes = quota ? (quota.usageInDrive || quota.usage) : 0;
+  const limitBytes = quota?.limit || 0;
+  const percentage = limitBytes > 0 ? Math.min(100, Math.max(1, Math.round((usedBytes / limitBytes) * 100))) : 0;
+
+  return (
+    <div
+      className={`group flex flex-col w-full px-4 py-2 text-sm transition-all rounded-lg ${
+        collapsed ? "justify-center px-2 py-3" : ""
+      } ${
+        isSelected
+          ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+      }`}
+    >
+      <div className="flex items-center justify-between w-full">
+        <button
+          onClick={onSelect}
+          className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
+          title={`${acc.account_name} (${acc.account_email})`}
+        >
+          <Cloud className="w-4 h-4 shrink-0 text-sky-400" />
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium leading-none">{acc.account_name}</p>
+              <p className="truncate text-[10px] text-muted-foreground mt-0.5">{acc.account_email}</p>
+            </div>
+          )}
+        </button>
+        {!collapsed && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDisconnect();
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive text-muted-foreground transition-opacity cursor-pointer"
+            title="Disconnect cloud account"
+          >
+            <Unlink className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {!collapsed && quota && limitBytes > 0 && (
+        <div className="mt-1.5 w-full pl-7 pr-1">
+          <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-0.5 font-mono">
+            <span>{formatStorageBytes(usedBytes)} / {formatStorageBytes(limitBytes)}</span>
+            <span>{percentage}%</span>
+          </div>
+          <div className="w-full h-1 bg-muted/60 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                percentage > 90 ? "bg-destructive" : percentage > 75 ? "bg-amber-500" : "bg-sky-400"
+              }`}
+              style={{ width: `${percentage}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const Sidebar = ({ 
   currentPath, 
@@ -264,47 +355,16 @@ export const Sidebar = ({
           </div>
         )}
 
-        {cloudAccounts.map((acc) => {
-          const isSelected = activeView === 'files' && selectedFilter.startsWith(`cloud:${acc.id}`);
-          return (
-            <div
-              key={acc.id}
-              className={`group flex items-center justify-between w-full px-4 py-2 text-sm transition-all ${
-                collapsed ? "justify-center px-2 py-3" : ""
-              } ${
-                isSelected
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-              }`}
-            >
-              <button
-                onClick={() => handleCategoryClick(`cloud:${acc.id}:root`)}
-                className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
-                title={acc.account_name}
-              >
-                <Cloud className="w-4 h-4 shrink-0 text-sky-400" />
-                {!collapsed && (
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium leading-none">{acc.account_name}</p>
-                    <p className="truncate text-[10px] text-muted-foreground mt-0.5">{acc.account_email}</p>
-                  </div>
-                )}
-              </button>
-              {!collapsed && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDisconnectAccount(acc.id, acc.account_name);
-                  }}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive text-muted-foreground transition-opacity cursor-pointer"
-                  title="Disconnect cloud account"
-                >
-                  <Unlink className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          );
-        })}
+        {cloudAccounts.map((acc) => (
+          <CloudAccountRow
+            key={acc.id}
+            acc={acc}
+            isSelected={activeView === 'files' && selectedFilter.startsWith(`cloud:${acc.id}`)}
+            collapsed={collapsed}
+            onSelect={() => handleCategoryClick(`cloud:${acc.id}:root`)}
+            onDisconnect={() => handleDisconnectAccount(acc.id, acc.account_name)}
+          />
+        ))}
 
         {cloudAccounts.length === 0 && !collapsed && (
           <div className="px-4 py-1.5">

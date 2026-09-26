@@ -345,6 +345,7 @@ export const FileExplorer = () => {
   const currentFolder = currentPath[currentPath.length - 1] || "Home";
 
   const isTrashMode = selectedFilter === "trash" || currentFolder === "Trash";
+  const isEffectiveTrashMode = isTrashMode || (isCloudMode && cloudFolderId === "trash");
   const isStarredMode = selectedFilter === "starred" || currentFolder === "Starred";
   const isInboxMode = selectedFilter === "inbox" || currentFolder === "Telegram Inbox";
   const isVaultMode = selectedFilter === "vault" || currentFolder === "Private Vault" || currentPath[0] === "Private Vault" || currentPath[0] === "Vault";
@@ -357,6 +358,14 @@ export const FileExplorer = () => {
   const [cloudBreadcrumbs, setCloudBreadcrumbs] = useState<Array<{ id: string; name: string }>>([
     { id: "root", name: "Google Drive" }
   ]);
+
+  useEffect(() => {
+    if (isCloudMode && cloudFolderId === "root") {
+      const accName = cloudQuery.data?.account_name || "Google Drive";
+      setCloudBreadcrumbs([{ id: "root", name: accName }]);
+      setCurrentPath([accName]);
+    }
+  }, [isCloudMode, cloudAccountId, cloudFolderId, cloudQuery.data?.account_name]);
 
   // Helper to ensure clean API path even if a virtual segment exists in currentPath
   const getCleanPath = (segments: string[]) => {
@@ -451,7 +460,12 @@ export const FileExplorer = () => {
       is_cloud: true,
       cloud_account_id: cloudAccountId,
       cloud_file_id: ci.id,
-      webViewLink: ci.webViewLink
+      webViewLink: ci.webViewLink,
+      webContentLink: ci.webContentLink,
+      is_virtual: ci.is_virtual,
+      is_starred: ci.starred,
+      starred: ci.starred,
+      is_trashed: ci.trashed,
     } as any));
   }, [isCloudMode, cloudQuery.data, cloudAccountId]);
 
@@ -985,7 +999,12 @@ export const FileExplorer = () => {
   const handleNewFolder = async (folderName: string) => {
     try {
       if (isCloudMode) {
-        await api.createCloudFolder(cloudAccountId, folderName, cloudFolderId);
+        if (["trash", "starred", "shared_with_me"].includes(cloudFolderId)) {
+          toast.error("Cannot create folders here. Please navigate inside My Drive.");
+          return;
+        }
+        const effectiveParent = (cloudFolderId === "root" || cloudFolderId === "my_drive") ? "root" : cloudFolderId;
+        await api.createCloudFolder(cloudAccountId, folderName, effectiveParent);
         toast.success(`Folder "${folderName}" created in Google Drive`);
         setNewFolderDialogOpen(false);
         refetch();
@@ -1098,10 +1117,15 @@ export const FileExplorer = () => {
   const handleDownload = async (item: FileItem) => {
     try {
       if ((item as any).is_cloud) {
-        if ((item as any).webViewLink) {
-          window.open((item as any).webViewLink, '_blank');
+        if (item.type === "folder") {
+          toast.info("Folder download from Google Drive is not supported directly. Please copy files to Telegram storage.");
           return;
         }
+        const fileId = (item as any).cloud_file_id || item.id;
+        const dlUrl = api.getCloudDownloadUrl(cloudAccountId || (item as any).cloud_account_id, fileId);
+        downloadManager.addDownload(dlUrl, item.name);
+        toast.success(`Download queued: ${item.name}`);
+        return;
       }
 
       const baseUrl = getApiBaseUrl();
@@ -1220,8 +1244,9 @@ export const FileExplorer = () => {
 
       if (isCloudMode) {
         const fileId = (item as any).cloud_file_id || item.id;
-        await api.deleteCloudFile(cloudAccountId, fileId);
-        toast.success(`Deleted "${item.name}" from Google Drive`);
+        const isAlreadyTrashed = cloudFolderId === "trash" || Boolean((item as any).is_trashed);
+        await api.deleteCloudFile(cloudAccountId, fileId, isAlreadyTrashed);
+        toast.success(isAlreadyTrashed ? `Permanently deleted "${item.name}" from Google Drive` : `Moved "${item.name}" to Google Drive Trash`);
         setDeleteDialog(null);
         refetch();
         return;
@@ -1245,6 +1270,14 @@ export const FileExplorer = () => {
   const handleToggleStar = async (item: FileItem) => {
     if (!item.id) return;
     try {
+      if (isCloudMode) {
+        const fileId = (item as any).cloud_file_id || item.id;
+        const newStarred = !(item.starred || (item as any).is_starred);
+        await api.starCloudFile(cloudAccountId || (item as any).cloud_account_id, fileId, newStarred);
+        toast.success(newStarred ? `Added "${item.name}" to Starred in Google Drive` : `Removed "${item.name}" from Starred in Google Drive`);
+        refetch();
+        return;
+      }
       const newStarred = !item.starred;
       await api.toggleStar(item.id, newStarred);
       toast.success(newStarred ? `Added "${item.name}" to Starred` : `Removed "${item.name}" from Starred`);
@@ -1257,6 +1290,13 @@ export const FileExplorer = () => {
   const handleRestoreItem = async (item: FileItem) => {
     if (!item.id) return;
     try {
+      if (isCloudMode) {
+        const fileId = (item as any).cloud_file_id || item.id;
+        await api.restoreCloudFile(cloudAccountId || (item as any).cloud_account_id, fileId);
+        toast.success(`Restored "${item.name}" in Google Drive`);
+        refetch();
+        return;
+      }
       await api.restoreFile(item.id);
       toast.success(`Restored "${item.name}"`);
       refetch();
@@ -1268,8 +1308,13 @@ export const FileExplorer = () => {
   const handleEmptyTrash = async () => {
     try {
       setIsEmptyingTrash(true);
-      const res = await api.emptyTrash();
-      toast.success(res.message || "Trash emptied successfully");
+      if (isCloudMode) {
+        await api.emptyCloudTrash(cloudAccountId);
+        toast.success("Google Drive trash emptied successfully");
+      } else {
+        const res = await api.emptyTrash();
+        toast.success(res.message || "Trash emptied successfully");
+      }
       setEmptyTrashDialogOpen(false);
       refetch();
     } catch (error: any) {
@@ -1529,7 +1574,7 @@ export const FileExplorer = () => {
             />
 
             {/* Trash Banner */}
-            {isTrashMode && (
+            {isEffectiveTrashMode && (
               <div className="flex items-center justify-between px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-sm">
                 <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
                   <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
@@ -1626,9 +1671,12 @@ export const FileExplorer = () => {
               hasClipboard={hasClipboard}
               isClipboardPasted={isClipboardPasted()}
               onRefresh={refetch}
-              isTrashMode={isTrashMode}
+              isTrashMode={isEffectiveTrashMode}
               onRestoreItem={handleRestoreItem}
               onToggleStar={handleToggleStar}
+              isCloudMode={isCloudMode}
+              cloudAccountId={cloudAccountId}
+              cloudFolderId={cloudFolderId}
             />
 
             {/* Pagination Controls */}
@@ -1655,7 +1703,8 @@ export const FileExplorer = () => {
         itemType={deleteDialog?.item.type || "file"}
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
-        isTrashMode={isTrashMode}
+        isTrashMode={isEffectiveTrashMode}
+        isCloudMode={isCloudMode}
       />
 
       {/* Empty Trash Confirmation Dialog */}

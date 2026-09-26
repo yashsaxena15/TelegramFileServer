@@ -4,10 +4,12 @@ import os
 import json
 import base64
 import logging
+import urllib.parse
+import aiohttp
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Depends, HTTPException, Query, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..security.credentials import require_auth, User
@@ -36,6 +38,13 @@ class RenameFileRequest(BaseModel):
 class CreateFolderRequest(BaseModel):
     parent_id: Optional[str] = "root"
     folder_name: str
+
+class StarFileRequest(BaseModel):
+    file_id: str
+    starred: bool = True
+
+class RestoreFileRequest(BaseModel):
+    file_id: str
 
 class TransferToTelegramRequest(BaseModel):
     source_file_id: str
@@ -251,12 +260,12 @@ async def list_cloud_files(
         access_token = await GoogleDriveManager.get_valid_access_token(account)
         res = await GoogleDriveManager.list_folder(
             access_token=access_token,
-            folder_id=folder_id or "root",
-            page_size=page_size or 50,
-            page_token=page_token,
-            search_query=query,
-            sort_by=sort_by,
-            sort_order=sort_order
+            folder_id=folder_id if isinstance(folder_id, str) and folder_id.strip() else "root",
+            page_size=page_size if isinstance(page_size, int) else 50,
+            page_token=page_token if isinstance(page_token, str) else None,
+            search_query=query if isinstance(query, str) and query.strip() else None,
+            sort_by=sort_by if isinstance(sort_by, str) else "name",
+            sort_order=sort_order if isinstance(sort_order, str) else "asc"
         )
         return {
             "account_id": account_id,
@@ -338,6 +347,232 @@ async def create_cloud_folder(
         return {"success": True, "folder": created}
     except Exception as e:
         logger.error(f"[GDRIVE_MKDIR] Error creating folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{account_id}/storage")
+async def get_cloud_storage(
+    account_id: str,
+    user: User = Depends(require_auth)
+):
+    """Fetch real-time quota usage and user details for the connected Google Drive account."""
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found.")
+
+    try:
+        access_token = await GoogleDriveManager.get_valid_access_token(account)
+        quota = await GoogleDriveManager.get_storage_quota(access_token)
+        return {
+            "account_id": account_id,
+            "provider": account.get("provider", "google_drive"),
+            "account_email": account.get("account_email"),
+            "account_name": account.get("account_name"),
+            **quota
+        }
+    except Exception as e:
+        logger.error(f"[GDRIVE_STORAGE] Error fetching quota for {account_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{account_id}/stream/{file_id}")
+async def stream_cloud_file(
+    account_id: str,
+    file_id: str,
+    request: Request,
+    user: User = Depends(require_auth)
+):
+    """
+    Stream a video/audio file directly from Google Drive to the browser player
+    supporting HTTP Range requests (206 Partial Content) with zero disk storage on VM.
+    """
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found.")
+
+    try:
+        access_token = await GoogleDriveManager.get_valid_access_token(account)
+        meta = await GoogleDriveManager.get_file_info(access_token, file_id)
+        file_name = meta.get("name", "video.mp4")
+        mime_type = meta.get("mimeType", "video/mp4")
+
+        # Forward Range header if present
+        range_header = request.headers.get("Range")
+        drive_headers = {"Authorization": f"Bearer {access_token}"}
+        if range_header:
+            drive_headers["Range"] = range_header
+
+        url = GoogleDriveManager.get_download_url(file_id)
+
+        session = aiohttp.ClientSession()
+        resp = await session.get(url, headers=drive_headers, timeout=aiohttp.ClientTimeout(total=None, sock_read=60))
+
+        if resp.status not in (200, 206):
+            err_text = await resp.text()
+            resp.close()
+            await session.close()
+            logger.error(f"[GDRIVE_STREAM] Failed to fetch stream: status={resp.status}, err={err_text}")
+            raise HTTPException(status_code=resp.status, detail=f"Google Drive stream error: {err_text}")
+
+        async def body_stream():
+            try:
+                async for chunk in resp.content.iter_chunked(256 * 1024):
+                    yield chunk
+            finally:
+                resp.close()
+                await session.close()
+
+        out_headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Type": resp.headers.get("Content-Type") or mime_type,
+            "Cache-Control": "no-cache",
+        }
+        if "Content-Range" in resp.headers:
+            out_headers["Content-Range"] = resp.headers["Content-Range"]
+        if "Content-Length" in resp.headers:
+            out_headers["Content-Length"] = resp.headers["Content-Length"]
+
+        safe_name = urllib.parse.quote(file_name)
+        out_headers["Content-Disposition"] = f'inline; filename="{safe_name}"; filename*=UTF-8\'\'{safe_name}'
+
+        return StreamingResponse(
+            body_stream(),
+            status_code=resp.status,
+            headers=out_headers
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[GDRIVE_STREAM] Error streaming file {file_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{account_id}/download/{file_id}")
+async def download_cloud_file(
+    account_id: str,
+    file_id: str,
+    request: Request,
+    user: User = Depends(require_auth)
+):
+    """
+    Directly stream a file from Google Drive to the client as an attachment download
+    without opening Google Drive's web viewer.
+    """
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found.")
+
+    try:
+        access_token = await GoogleDriveManager.get_valid_access_token(account)
+        meta = await GoogleDriveManager.get_file_info(access_token, file_id)
+        file_name = meta.get("name", "download")
+        mime_type = meta.get("mimeType", "application/octet-stream")
+
+        url = GoogleDriveManager.get_download_url(file_id)
+        drive_headers = {"Authorization": f"Bearer {access_token}"}
+
+        range_header = request.headers.get("Range")
+        if range_header:
+            drive_headers["Range"] = range_header
+
+        session = aiohttp.ClientSession()
+        resp = await session.get(url, headers=drive_headers, timeout=aiohttp.ClientTimeout(total=None, sock_read=60))
+
+        if resp.status not in (200, 206):
+            err_text = await resp.text()
+            resp.close()
+            await session.close()
+            logger.error(f"[GDRIVE_DOWNLOAD] Failed to download: status={resp.status}, err={err_text}")
+            raise HTTPException(status_code=resp.status, detail=f"Google Drive download error: {err_text}")
+
+        async def body_stream():
+            try:
+                async for chunk in resp.content.iter_chunked(512 * 1024):
+                    yield chunk
+            finally:
+                resp.close()
+                await session.close()
+
+        safe_name = urllib.parse.quote(file_name)
+        out_headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Type": resp.headers.get("Content-Type") or mime_type,
+            "Content-Disposition": f'attachment; filename="{safe_name}"; filename*=UTF-8\'\'{safe_name}',
+        }
+        if "Content-Range" in resp.headers:
+            out_headers["Content-Range"] = resp.headers["Content-Range"]
+        if "Content-Length" in resp.headers:
+            out_headers["Content-Length"] = resp.headers["Content-Length"]
+
+        return StreamingResponse(
+            body_stream(),
+            status_code=resp.status,
+            headers=out_headers
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[GDRIVE_DOWNLOAD] Error downloading file {file_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{account_id}/files/star")
+async def star_cloud_file(
+    account_id: str,
+    body: StarFileRequest,
+    user: User = Depends(require_auth)
+):
+    """Star or unstar a file/folder in Google Drive."""
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found.")
+
+    try:
+        access_token = await GoogleDriveManager.get_valid_access_token(account)
+        success = await GoogleDriveManager.toggle_star(
+            access_token=access_token,
+            file_id=body.file_id,
+            starred=body.starred
+        )
+        return {"success": success, "starred": body.starred}
+    except Exception as e:
+        logger.error(f"[GDRIVE_STAR] Error starring {body.file_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{account_id}/files/restore")
+async def restore_cloud_file(
+    account_id: str,
+    body: RestoreFileRequest,
+    user: User = Depends(require_auth)
+):
+    """Restore a trashed file or folder in Google Drive."""
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found.")
+
+    try:
+        access_token = await GoogleDriveManager.get_valid_access_token(account)
+        success = await GoogleDriveManager.restore_file(
+            access_token=access_token,
+            file_id=body.file_id
+        )
+        return {"success": success, "message": "File restored in Google Drive."}
+    except Exception as e:
+        logger.error(f"[GDRIVE_RESTORE] Error restoring {body.file_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{account_id}/trash/empty")
+async def empty_cloud_trash(
+    account_id: str,
+    user: User = Depends(require_auth)
+):
+    """Permanently empty Google Drive trash."""
+    account = database.CloudAccounts.get_account_raw(account_id=account_id, user_id=_get_user_identifiers(user))
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found.")
+
+    try:
+        access_token = await GoogleDriveManager.get_valid_access_token(account)
+        success = await GoogleDriveManager.empty_trash(access_token)
+        return {"success": success, "message": "Google Drive trash emptied."}
+    except Exception as e:
+        logger.error(f"[GDRIVE_EMPTY_TRASH] Error emptying trash: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{account_id}/transfer-to-telegram")
