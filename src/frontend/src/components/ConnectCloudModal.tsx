@@ -51,9 +51,11 @@ export const ConnectCloudModal: React.FC<ConnectCloudModalProps> = ({
   const handleConnectGoogle = async () => {
     setIsConnecting(true);
     try {
+      const redirectUri = `${window.location.origin}/api/cloud/gdrive/callback`;
       const res = await api.getGoogleAuthUrl(
         customClientId.trim() || undefined,
-        customClientSecret.trim() || undefined
+        customClientSecret.trim() || undefined,
+        redirectUri
       );
 
       // Open Google OAuth consent in a popup window
@@ -191,6 +193,12 @@ export const ConnectCloudModal: React.FC<ConnectCloudModalProps> = ({
                     onChange={(e) => setCustomClientSecret(e.target.value)}
                     className="h-8 text-xs mt-1"
                   />
+                </div>
+                <div className="pt-1">
+                  <Label className="text-[11px] text-muted-foreground font-medium">Authorized Redirect URI (Google Console):</Label>
+                  <div className="mt-1 p-2 rounded bg-background/80 border text-[11px] font-mono select-all break-all text-foreground/80">
+                    {typeof window !== 'undefined' ? `${window.location.origin}/api/cloud/gdrive/callback` : ''}
+                  </div>
                 </div>
               </div>
             )}
